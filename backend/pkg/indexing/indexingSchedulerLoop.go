@@ -4,7 +4,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gtsteffaniak/filebrowser/backend/internal/utils"
 	"github.com/gtsteffaniak/go-logger/logger"
 )
 
@@ -59,9 +58,6 @@ func (idx *Index) removeScannerFromSlotLocked(s *Scanner) {
 
 // registerScannerNextRun removes the scanner from any previous slot and adds it at the given UTC time.
 func (idx *Index) registerScannerNextRun(s *Scanner, when time.Time) {
-	if !idx.useAdaptiveScheduling() {
-		return
-	}
 	when = when.UTC().Truncate(time.Second)
 	sec := when.Unix()
 	idx.scheduleSlotsMu.Lock()
@@ -123,9 +119,6 @@ func (idx *Index) earliestSlotWake(now time.Time) time.Time {
 }
 
 func (idx *Index) restoreScannerNextRuns() {
-	if !idx.useAdaptiveScheduling() {
-		return
-	}
 	idx.scheduleSlotsMu.Lock()
 	idx.scheduleSlots = make(map[int64][]*Scanner)
 	idx.scheduleSlotsMu.Unlock()
@@ -141,16 +134,14 @@ func (idx *Index) restoreScannerNextRuns() {
 				s.nextRun = time.Time{}
 				return
 			}
-			tier := utils.Clamp(s.currentSchedule, 0, len(scanScheduleTiers)-1)
-			d := scanScheduleDuration(tier)
-			next = computeNextSlotTime(s.lastScanned, now, d)
+			next = idx.nextScanTime(s.lastScanned, now, s.currentSchedule)
 			s.nextRun = next
 		})
 		if !next.IsZero() {
 			idx.registerScannerNextRun(s, next)
 		}
 	}
-	logger.Debugf("[%s] scheduler: restored nextRun for %d scanners (adaptive)", idx.Name, n)
+	logger.Debugf("[%s] scheduler: restored nextRun for %d scanners (interval=%s, fullScanEvery=%d)", idx.Name, n, idx.scanScheduleConfig().ScanInterval, idx.fullScanEvery())
 }
 
 func sortedScannerPaths(idx *Index) []string {
@@ -184,12 +175,15 @@ func (idx *Index) pruneGoneChildScanners() {
 		if !ok {
 			continue
 		}
-		idx.scheduleSlotsMu.Lock()
-		idx.removeScannerFromSlotLocked(s)
-		idx.scheduleSlotsMu.Unlock()
-		idx.mu.Lock()
-		delete(idx.scanners, path)
-		idx.mu.Unlock()
+		if idx.db != nil {
+			if err := s.removeScannedDirectory(path); err != nil {
+				logger.Warningf("remove missing scanner %s: %v", path, err)
+				continue
+			}
+		} else {
+			s.removeSelf()
+		}
+
 		logger.Debugf("Scheduler removed scanner [%s]: path gone", path)
 	}
 }
@@ -198,7 +192,10 @@ func (idx *Index) needsAdaptiveBootstrap() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	for _, s := range idx.scanners {
-		if s.lastScanned.IsZero() {
+		s.statsMu.RLock()
+		unscanned := s.lastScanned.IsZero()
+		s.statsMu.RUnlock()
+		if unscanned {
 			return true
 		}
 	}
@@ -221,15 +218,20 @@ func (idx *Index) runSerialScanPass() {
 	}()
 
 	for _, p := range paths {
+		if idx.isStopped() {
+			return
+		}
 		idx.mu.RLock()
 		s, ok := idx.scanners[p]
 		idx.mu.RUnlock()
 		if !ok {
 			continue
 		}
-		if s.scanPath != "/" && !s.directoryExists() {
-			s.removeSelf()
-			continue
+		s.statsMu.RLock()
+		unscanned := s.lastScanned.IsZero()
+		s.statsMu.RUnlock()
+		if !unscanned {
+			continue // discovering a new child must not restart existing scanners early
 		}
 		s.executeScan()
 	}
@@ -238,7 +240,7 @@ func (idx *Index) runSerialScanPass() {
 func (idx *Index) schedulerAdaptiveTick() {
 	idx.pruneGoneChildScanners()
 	if idx.needsAdaptiveBootstrap() {
-		logger.Debugf("[%s] scheduler: adaptive bootstrap (serial pass all scanners)", idx.Name)
+		logger.Debugf("[%s] scheduler: bootstrap unscanned paths", idx.Name)
 		idx.runSerialScanPass()
 		return
 	}
@@ -253,8 +255,11 @@ func (idx *Index) schedulerAdaptiveTick() {
 			return batch[i].scanPath < batch[j].scanPath
 		})
 		firstPath := batch[0].scanPath
-		logger.Debugf("[%s] scheduler: adaptive slot scanners=%d first=%s", idx.Name, len(batch), firstPath)
+		logger.Debugf("[%s] scheduler: slot scanners=%d first=%s", idx.Name, len(batch), firstPath)
 		for _, s := range batch {
+			if idx.isStopped() {
+				return
+			}
 			var nextRunStr string
 			s.withStatsRLock(func() {
 				if s.nextRun.IsZero() {
@@ -263,11 +268,7 @@ func (idx *Index) schedulerAdaptiveTick() {
 					nextRunStr = s.nextRun.UTC().Format(time.RFC3339)
 				}
 			})
-			logger.Debugf("[%s] scheduler: adaptive run path=%s nextRun=%s", idx.Name, s.scanPath, nextRunStr)
-			if s.scanPath != "/" && !s.directoryExists() {
-				s.removeSelf()
-				continue
-			}
+			logger.Debugf("[%s] scheduler: run path=%s nextRun=%s", idx.Name, s.scanPath, nextRunStr)
 			s.executeScan()
 		}
 	}
@@ -276,7 +277,7 @@ func (idx *Index) schedulerAdaptiveTick() {
 		n := len(idx.scanners)
 		idx.mu.RUnlock()
 		now := time.Now()
-		logger.Debugf("[%s] scheduler: adaptive tick no due slot (now=%v scanners=%d)", idx.Name, now.UTC().Format(time.RFC3339), n)
+		logger.Debugf("[%s] scheduler: tick no due slot (now=%v scanners=%d)", idx.Name, now.UTC().Format(time.RFC3339), n)
 	}
 }
 
@@ -290,7 +291,7 @@ func (idx *Index) runIndexScheduler() {
 	idx.mu.RLock()
 	n := len(idx.scanners)
 	idx.mu.RUnlock()
-	logger.Debugf("[%s] scheduler: started adaptive scanners=%d", idx.Name, n)
+	logger.Debugf("[%s] scheduler: started scanners=%d interval=%s fullScanEvery=%d", idx.Name, n, idx.scanScheduleConfig().ScanInterval, idx.fullScanEvery())
 	idx.schedulerAdaptiveTick()
 	for {
 		now := time.Now()
@@ -299,10 +300,10 @@ func (idx *Index) runIndexScheduler() {
 		if d < time.Second {
 			d = time.Second
 		}
-		logger.Debugf("[%s] scheduler: adaptive sleep until=%v (in %v)", idx.Name, next.UTC().Format(time.RFC3339), d)
+		logger.Debugf("[%s] scheduler: sleep until=%v (in %v)", idx.Name, next.UTC().Format(time.RFC3339), d)
 		select {
 		case <-idx.schedulerStop:
-			logger.Debugf("[%s] scheduler: adaptive loop stopped", idx.Name)
+			logger.Debugf("[%s] scheduler: loop stopped", idx.Name)
 			return
 		case <-time.After(d):
 			idx.schedulerAdaptiveTick()
@@ -311,10 +312,17 @@ func (idx *Index) runIndexScheduler() {
 }
 
 func (idx *Index) stopScheduler() {
-	idx.schedulerStopOnce.Do(func() {
-		if idx.schedulerStop != nil {
-			logger.Debugf("[%s] scheduler: stop channel closed", idx.Name)
-			close(idx.schedulerStop)
-		}
-	})
+	idx.mu.Lock()
+	idx.stopRequested = true
+	stop := idx.schedulerStop
+	idx.mu.Unlock()
+	if stop != nil {
+		idx.schedulerStopOnce.Do(func() { close(stop) })
+	}
+}
+
+func (idx *Index) isStopped() bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.stopRequested
 }

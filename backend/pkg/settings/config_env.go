@@ -1,10 +1,58 @@
 package settings
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 )
+
+// Direct environment overrides apply after YAML, including when no file exists.
+func loadIndexEnvConfig() error {
+	for name, target := range map[string]*string{
+		"FILEBROWSER_INDEX_DRIVER":        &Config.Server.IndexSqlConfig.Driver,
+		"FILEBROWSER_INDEX_DSN":           &Config.Server.IndexSqlConfig.DSN,
+		"FILEBROWSER_INDEX_MODE":          &Config.Server.IndexSqlConfig.Mode,
+		"FILEBROWSER_INDEX_SCAN_INTERVAL": &Config.Server.Indexing.ScanInterval,
+	} {
+		if value, ok := os.LookupEnv(name); ok {
+			*target = value
+		}
+	}
+	if value, ok := os.LookupEnv("FILEBROWSER_INDEX_FULL_SCAN_EVERY"); ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			return fmt.Errorf("FILEBROWSER_INDEX_FULL_SCAN_EVERY must be a non-negative integer (0 uses the default 5)")
+		}
+		Config.Server.Indexing.FullScanEvery = parsed
+	}
+	for name, target := range map[string]*bool{
+		"FILEBROWSER_INDEX_INCLUDE_HIDDEN": &Config.Server.IndexSqlConfig.IncludeHidden,
+		"FILEBROWSER_SHOW_HIDDEN":          &Config.UserDefaults.Listing.ShowHidden,
+	} {
+		if value, ok := os.LookupEnv(name); ok {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("%s must be a boolean", name)
+			}
+			*target = parsed
+			if name == "FILEBROWSER_SHOW_HIDDEN" {
+				// Overlay persisted defaults as YAML does, without enforcing an
+				// existing user's personal visibility preference.
+				Env.ConfigUserDefaultsSpecified = true
+				const path = "listing.showHidden"
+				found := false
+				for _, p := range Env.ConfigUserDefaultsSpecifiedPaths {
+					found = found || p == path
+				}
+				if !found {
+					Env.ConfigUserDefaultsSpecifiedPaths = append(Env.ConfigUserDefaultsSpecifiedPaths, path)
+				}
+			}
+		}
+	}
+	return nil
+}
 
 // expandConfigEnv walks a decoded YAML value tree and substitutes $VAR / ${VAR}
 // in string scalars using the process environment. Non-string scalars (numbers,

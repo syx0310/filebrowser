@@ -43,6 +43,8 @@
     "requestTimedOut": "S-a depășit timpul de așteptare pentru cerere. Verificați setările rețelei sau ale proxy-ului invers."
   },
   "files": {
+    "count": "Număr",
+    "recursiveFileCount": "Numărul de fișiere, inclusiv din subfoldere",
     "sortByCreationTime": "Sortează după timpul de creare",
     "creationTime": "Timp de creare",
     "emptyFile": "Fișier gol",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Selecție multiplă activată",
     "sortByLastModified": "Ordonează dup ultima modificare",
     "sortByName": "Ordonează după nume",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Ordonează după dimensiune",
     "sortByType": "Ordonează după tip",
     "noPreview": "Previzualizarea nu este disponibilă pentru acest fișier.",

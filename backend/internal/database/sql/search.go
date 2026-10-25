@@ -20,7 +20,7 @@ type SearchItem struct {
 }
 
 // appendNameGlobSQL adds AND (name GLOB ? OR ...) or AND (name GLOB ? AND ...) when joinAnd is true.
-func appendNameGlobSQL(query string, args []interface{}, patterns []string, joinAnd, caseExact bool) (string, []interface{}) {
+func (db *IndexDB) appendNameGlobSQL(query string, args []interface{}, patterns []string, joinAnd, caseExact bool) (string, []interface{}) {
 	if len(patterns) == 0 {
 		return query, args
 	}
@@ -30,8 +30,13 @@ func appendNameGlobSQL(query string, args []interface{}, patterns []string, join
 	}
 	parts := make([]string, len(patterns))
 	for i := range patterns {
-		parts[i] = nameExpr + " GLOB ?"
-		args = append(args, patterns[i])
+		if db.postgres {
+			parts[i] = nameExpr + " ~ ?"
+			args = append(args, postgresGlob(patterns[i]))
+		} else {
+			parts[i] = nameExpr + " GLOB ?"
+			args = append(args, patterns[i])
+		}
 	}
 	join := " OR "
 	if joinAnd {
@@ -54,12 +59,12 @@ func (db *IndexDB) SearchItems(source string, scope string, largest bool, nameGl
 	// Apply scope filter
 	if scope != "" {
 		// Use GLOB for prefix matching which is supported by SQLite and efficient
-		query += " AND path GLOB ?"
-		args = append(args, scope+"*")
+		query += " AND path >= ? AND path < ?"
+		args = append(args, scope, getNextPathPrefix(scope))
 	}
 
 	if !largest && len(nameGlobPatterns) > 0 {
-		query, args = appendNameGlobSQL(query, args, nameGlobPatterns, nameGlobPatternsAnd, caseExact)
+		query, args = db.appendNameGlobSQL(query, args, nameGlobPatterns, nameGlobPatternsAnd, caseExact)
 	}
 
 	if largest {
@@ -104,8 +109,8 @@ func (db *IndexDB) SearchItemsMultiSource(sources []string, sourceScopes map[str
 		scope, hasScope := sourceScopes[source]
 		if hasScope && scope != "" {
 			// Source has a scope - filter by it
-			scopeConditions = append(scopeConditions, "(source = ? AND path GLOB ?)")
-			args = append(args, source, scope+"*")
+			scopeConditions = append(scopeConditions, "(source = ? AND path >= ? AND path < ?)")
+			args = append(args, source, scope, getNextPathPrefix(scope))
 		} else {
 			// Source has no scope or empty scope - include all paths for this source
 			// The source IN clause already filters by source, so we just need to ensure
@@ -124,7 +129,7 @@ func (db *IndexDB) SearchItemsMultiSource(sources []string, sourceScopes map[str
 	}
 
 	if !largest && len(nameGlobPatterns) > 0 {
-		query, args = appendNameGlobSQL(query, args, nameGlobPatterns, nameGlobPatternsAnd, caseExact)
+		query, args = db.appendNameGlobSQL(query, args, nameGlobPatterns, nameGlobPatternsAnd, caseExact)
 	}
 
 	if largest {

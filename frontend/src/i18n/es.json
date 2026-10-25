@@ -43,6 +43,8 @@
     "requestTimedOut": "La solicitud ha superado el tiempo de espera. Comprueba la configuración de tu red o del proxy inverso."
   },
   "files": {
+    "count": "Cantidad",
+    "recursiveFileCount": "Número de archivos, incluidas las subcarpetas",
     "sortByCreationTime": "Ordenar por fecha de creación",
     "creationTime": "Fecha de creación",
     "emptyFile": "Archivo vacío",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Selección múltiple activada",
     "sortByLastModified": "Ordenar por fecha de modificación",
     "sortByName": "Ordenar por nombre",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Ordenar por tamaño",
     "sortByType": "Ordenar por tipo",
     "noPreview": "Vista previa no disponible",

@@ -43,6 +43,8 @@
     "requestTimedOut": "De tijdlimiet voor het verzoek is verstreken. Controleer je netwerk- of reverse-proxy-instellingen."
   },
   "files": {
+    "count": "Aantal",
+    "recursiveFileCount": "Aantal bestanden, inclusief submappen",
     "sortByCreationTime": "Sorteren op aanmaaktijd",
     "creationTime": "Aanmaaktijd",
     "emptyFile": "Leeg bestand",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Meerdere items selecteren ingeschakeld",
     "sortByLastModified": "Sorteren op laatst bewerkt",
     "sortByName": "Sorteren op naam",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Sorteren op grootte",
     "sortByType": "Sorteren op type",
     "noPreview": "Preview is niet beschikbaar voor dit bestand.",

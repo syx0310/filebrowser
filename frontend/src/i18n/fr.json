@@ -43,6 +43,8 @@
     "requestTimedOut": "La requête a dépassé le délai d'attente. Vérifiez votre connexion réseau ou les paramètres de votre proxy inverse."
   },
   "files": {
+    "count": "Nombre",
+    "recursiveFileCount": "Nombre de fichiers, sous-dossiers inclus",
     "sortByCreationTime": "Trier par date de création",
     "creationTime": "Date de création",
     "emptyFile": "Fichier vide",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Sélection multiple activée",
     "sortByLastModified": "Trier par date de dernière modification",
     "sortByName": "Trier par nom",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Trier par taille",
     "sortByType": "Trier par type",
     "noPreview": "Il n'y a pas de prévisualisation pour ce fichier.",

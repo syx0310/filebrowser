@@ -43,6 +43,8 @@
     "requestTimedOut": "A solicitação atingiu o tempo limite. Verifique as configurações da sua rede ou do proxy reverso."
   },
   "files": {
+    "count": "Contagem",
+    "recursiveFileCount": "Número de arquivos, incluindo subpastas",
     "sortByCreationTime": "Ordenar por data de criação",
     "creationTime": "Data de criação",
     "emptyFile": "Arquivo vazio",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Seleção múltipla ativada",
     "sortByLastModified": "Ordenar pela última modificação",
     "sortByName": "Ordenar pelo nome",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Ordenar pelo tamanho",
     "sortByType": "Ordenar pelo tipo",
     "noPreview": "Pré-visualização não disponível para este arquivo.",

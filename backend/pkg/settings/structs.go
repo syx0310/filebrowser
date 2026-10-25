@@ -75,6 +75,7 @@ type Server struct {
 	MaxArchiveSizeGB             int64          `json:"maxArchiveSize"`  // maximum archive/unarchive size in GB. 0 means no limit. (default: 20)
 	Filesystem                   Filesystem     `json:"filesystem"`      // filesystem settings
 	IndexSqlConfig               IndexSqlConfig `json:"indexSqlConfig"`  // Index database SQL configuration
+	Indexing                     IndexingConfig `json:"indexing"`        // default scan scheduling; sources may override individual settings
 	// not exposed to config
 	SourceMap    map[string]*Source `json:"-" validate:"omitempty"` // uses realpath as key
 	NameToSource map[string]*Source `json:"-" validate:"omitempty"` // uses name as key
@@ -107,20 +108,29 @@ type Filesystem struct {
 
 // Index SQL startup integrity modes (IndexSqlConfig.StartupIntegrityCheck).
 const (
-	// IndexStartupIntegrityQuickCheck runs PRAGMA quick_check (default). Slower on very large DBs but thorough.
+	// IndexStartupIntegrityQuickCheck runs PRAGMA quick_check when explicitly configured. Slower on very large DBs but thorough.
 	IndexStartupIntegrityQuickCheck = "quickCheck"
-	// IndexStartupIntegrityProbe verifies sqlite_master and optionally one row read only; fast for large indexes.
+	// IndexStartupIntegrityProbe is the default; verifies sqlite_master and optionally one row read only; fast for large indexes.
 	IndexStartupIntegrityProbe = "probe"
 	// IndexStartupIntegrityOff skips startup checks beyond sql.Open Ping; least safe, fastest boot.
 	IndexStartupIntegrityOff = "off"
 )
 
 type IndexSqlConfig struct {
+	Driver                string `json:"driver" validate:"omitempty,oneof=sqlite postgres"`                               // index storage backend (default: sqlite); the application database remains SQLite
+	DSN                   string `json:"dsn,omitempty"`                                                                   // secret: PostgreSQL connection string; prefer FILEBROWSER_INDEX_DSN
+	Mode                  string `json:"mode" validate:"omitempty,oneof=full size"`                                       // full: includes type/preview detection; size: file/directory sizes, timestamps and paths only
+	IncludeHidden         bool   `json:"includeHidden"`                                                                   // include hidden files and directories in indexing and size totals, independently of UI visibility
 	BatchSize             int    `json:"batchSize"`                                                                       // number of items to batch in a single transaction, typically 500-5000. higher = faster but could use more memory.
 	CacheSizeMB           int    `json:"cacheSizeMB"`                                                                     // size of the SQLite cache in MB
 	WalMode               bool   `json:"walMode"`                                                                         // enable the more complex WAL journaling mode. Slower, more memory usage, but better for deployments with constant user activity.
 	DisableReuse          bool   `json:"disableReuse"`                                                                    // enable to always create a new indexing database on startup.
-	StartupIntegrityCheck string `json:"startupIntegrityCheck,omitempty" validate:"omitempty,oneof=quickCheck probe off"` // the method used to check the integrity of the index database on startup (default: quickCheck)
+	StartupIntegrityCheck string `json:"startupIntegrityCheck,omitempty" validate:"omitempty,oneof=quickCheck probe off"` // the method used to check the accessibility of the index database on startup (default: probe; quickCheck performs a full check)
+}
+
+type IndexingConfig struct {
+	ScanInterval  string `json:"scanInterval"`                   // auto (default) uses adaptive scheduling; a duration such as 30m, 6h or 24h waits after each scan; minimum 1m; empty inherits the global setting
+	FullScanEvery int    `json:"fullScanEvery" validate:"gte=0"` // one full scan every N runs (default 5); 1 means always full; 0 inherits the global setting
 }
 
 type Integrations struct {
@@ -243,6 +253,7 @@ type SourceConfig struct {
 	DefaultEnabled   bool              `json:"defaultEnabled"`          // should be added as a default source for new users?
 	CreateUserDir    bool              `json:"createUserDir"`           // create a user directory for each user under defaultUserScope + username
 	UseLogicalSize   bool              `json:"useLogicalSize"`          // calculate sizes based on logical size instead of disk utilization (du -sh), folders will be 0 bytes when empty.
+	Indexing         IndexingConfig    `json:"indexing"`                // per-source scan scheduling overrides server.indexing and global environment defaults
 	// DefaultPermissions is the template for new user scopes on this source (also synced globally via Access settings).
 	DefaultPermissions users.SourceFilePermissions `json:"defaultPermissions,omitempty" yaml:"defaultPermissions,omitempty"`
 	// DefaultPermissionsFromConfig holds permission flags explicitly set under defaultPermissions in config YAML.

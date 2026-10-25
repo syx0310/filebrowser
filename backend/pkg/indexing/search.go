@@ -36,6 +36,9 @@ func (idx *Index) Search(search string, scope string, sourceSession string, larg
 
 // SearchParsed runs indexing search using pre-built options (e.g. repeated HTTP term parameters plus filter prefix).
 func (idx *Index) SearchParsed(baseOpts iteminfo.SearchOptions, scope string, sourceSession string, largest bool, limit int, olderThanUnix, newerThanUnix int64, useWildcard bool) []*SearchResult {
+	if idx.db == nil {
+		return []*SearchResult{}
+	}
 	scope = utils.AddTrailingSlashIfNotExists(scope)
 
 	runningHash := utils.InsecureRandomIdentifier(4)

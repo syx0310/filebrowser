@@ -60,10 +60,9 @@ export function getStatusLabel(status, $t) {
 }
 
 export function getHumanReadableTime(lastIndex, locale) {
-  if (Number.isNaN(Number(lastIndex))) return "";
   const val = Number(lastIndex);
-  if (val === 0) return "now";
-  return fromNow(val, locale);
+  if (!Number.isFinite(val) || val <= 0) return "";
+  return fromNow(val, locale, { unit: "seconds" });
 }
 
 export function formatDuration(seconds) {
@@ -84,7 +83,7 @@ export function buildIndexInfoRows(info, $t, locale) {
     { id: "assessment", label: $t("index.assessment"), value: getComplexityLabel(info.complexity || 0, $t) },
     { id: "files", label: $t("general.files"), value: info.files || 0 },
     { id: "folders", label: $t("general.folders"), value: info.folders || 0 },
-    { id: "lastScanned", label: $t("index.lastScanned"), value: getHumanReadableTime(info.lastIndex, locale) },
+    { id: "lastScanned", label: $t("index.lastScanned"), value: getHumanReadableTime(info.lastIndex, locale) || $t("index.unknown") },
     { id: "quickScan", label: $t("index.quickScan"), value: formatDuration(info.quickScanDurationSeconds) },
     { id: "fullScan", label: $t("index.fullScan"), value: formatDuration(info.fullScanDurationSeconds) },
   ];

@@ -382,7 +382,6 @@ func isGoTest() bool {
 	return flag.Lookup("test.v") != nil
 }
 
-
 func setupFFmpegIntegration() {
 	n := Config.Server.NumImageProcessors
 	if n < 1 {
@@ -647,6 +646,9 @@ func loadConfigWithDefaults(configFile string, generate bool) error {
 			},
 		}
 		loadEnvConfig()
+		if err := loadIndexEnvConfig(); err != nil {
+			return err
+		}
 		return ResolveDatabasePaths()
 	}
 
@@ -723,6 +725,9 @@ func loadConfigWithDefaults(configFile string, generate bool) error {
 	attachSourceDefaultPermissionsFromConfig(filteredConfig)
 
 	loadEnvConfig()
+	if err := loadIndexEnvConfig(); err != nil {
+		return err
+	}
 	return ResolveDatabasePaths()
 }
 
@@ -786,9 +791,27 @@ func ValidateConfig(config Settings) error {
 		return fmt.Errorf("could not register file_permission validator: %v", err)
 	}
 
-	err = validate.Struct(Config)
+	err = validate.Struct(config)
 	if err != nil {
 		return fmt.Errorf("could not validate config: %v", err)
+	}
+	if config.Server.IndexSqlConfig.Driver == "postgres" {
+		if strings.TrimSpace(config.Server.IndexSqlConfig.DSN) == "" {
+			return fmt.Errorf("server.indexSqlConfig.dsn is required for postgres")
+		}
+		if config.Server.IndexSqlConfig.DisableReuse {
+			return fmt.Errorf("server.indexSqlConfig.disableReuse is only supported with sqlite")
+		}
+	}
+	if _, err := ParseScanInterval(config.Server.Indexing.ScanInterval); err != nil {
+		return fmt.Errorf("server.indexing: %w", err)
+	}
+	for i, source := range config.Server.Sources {
+		if source != nil {
+			if _, err := ParseScanInterval(source.Config.Indexing.ScanInterval); err != nil {
+				return fmt.Errorf("server.sources[%d].config.indexing: %w", i, err)
+			}
+		}
 	}
 	return nil
 }
@@ -898,12 +921,15 @@ func SetDefaults(generate bool) Settings {
 			NameToSource:     map[string]*Source{},
 			CacheDir:         "tmp",
 			MaxArchiveSizeGB: 20,
+			Indexing:         IndexingConfig{ScanInterval: "auto", FullScanEvery: DefaultFullScanEvery},
 			IndexSqlConfig: IndexSqlConfig{
+				Driver:                "sqlite",
+				Mode:                  "full",
 				WalMode:               false,
 				BatchSize:             1000,
 				CacheSizeMB:           32,
 				DisableReuse:          false,
-				StartupIntegrityCheck: IndexStartupIntegrityQuickCheck,
+				StartupIntegrityCheck: IndexStartupIntegrityProbe,
 			},
 			Filesystem: Filesystem{
 				CreateFilePermission:      "644",

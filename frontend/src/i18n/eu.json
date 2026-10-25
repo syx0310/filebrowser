@@ -216,6 +216,8 @@
     "requestTimedOut": "Eskaeraren denbora-muga gainditu da. Egiaztatu sarearen edo alderantzizko proxyaren ezarpenak."
   },
   "files": {
+    "count": "Kopurua",
+    "recursiveFileCount": "Fitxategi kopurua, azpikarpetak barne",
     "emptyFile": "Fitxategi hutsa",
     "lastModified": "Azken aldaketa{suffix}",
     "duration": "Iraupena{suffix}",
@@ -223,6 +225,7 @@
     "multipleSelectionEnabled": "Hautapen anitza gaituta",
     "sortByLastModified": "Ordenatu azken aldaketaren arabera",
     "sortByName": "Ordenatu izenaren arabera",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Ordenatu tamainaren arabera",
     "sortByType": "Ordenatu motaren arabera",
     "sortByDuration": "Ordenatu iraupenaren arabera",

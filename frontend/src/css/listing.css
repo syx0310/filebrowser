@@ -2,6 +2,7 @@
    rem keeps them identical even though row text uses a smaller font size. */
 :root {
   --listing-col-gap: 1rem;
+  --listing-col-count: 5.5rem;
   --listing-col-size: 6.5rem;
   --listing-col-modified: 10rem;
   --listing-col-kind: 4.8rem;
@@ -75,6 +76,7 @@ body.rtl .listing-items {
   margin: 0;
 }
 
+.listing-item .count,
 .listing-item .size,
 .listing-item .modified,
 .listing-item .created,
@@ -458,6 +460,8 @@ body.rtl .listing-items {
   padding-right: var(--listing-col-gap);
 }
 
+.listing-items.list .listing-item .count,
+.listing-items.compact .listing-item .count,
 .listing-items.list .listing-item .size,
 .listing-items.compact .listing-item .size,
 .listing-items.list .listing-item .modified,
@@ -475,6 +479,12 @@ body.rtl .listing-items {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.listing-items.list .listing-item .count,
+.listing-items.compact .listing-item .count {
+  width: var(--listing-col-count);
+  font-variant-numeric: tabular-nums;
 }
 
 .listing-items.list .listing-item .size,

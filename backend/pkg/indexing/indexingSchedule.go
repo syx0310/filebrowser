@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gtsteffaniak/filebrowser/backend/internal/utils"
 	indexingdb "github.com/gtsteffaniak/filebrowser/backend/internal/database/dbindex"
 	"github.com/gtsteffaniak/filebrowser/backend/internal/events"
+	"github.com/gtsteffaniak/filebrowser/backend/internal/utils"
 	"github.com/gtsteffaniak/go-logger/logger"
 )
 
@@ -154,7 +154,7 @@ func (idx *Index) incrementScannerDirs() {
 	idx.mu.RUnlock()
 
 	if exists {
-		scanner.numDirs++
+		scanner.withStatsLock(func() { scanner.numDirs++ })
 	}
 }
 
@@ -196,6 +196,31 @@ func (idx *Index) PostScan() error {
 	idle := idx.activeScannerPath == ""
 	idx.mu.RUnlock()
 	if idle {
+		idx.mu.RLock()
+		allScanned := len(idx.scanners) > 0
+		var count uint64
+		for _, scanner := range idx.scanners {
+			scanner.statsMu.RLock()
+			if scanner.lastScanned.IsZero() {
+				allScanned = false
+			}
+			count += scanner.numFiles
+			scanner.statsMu.RUnlock()
+		}
+		idx.mu.RUnlock()
+		if allScanned {
+			idx.setFolderCount("/", &count)
+			// Partition probes are cached independently. The indexed size must
+			// reflect this scan rather than the first (possibly empty) probe.
+			if size, ok := idx.GetFolderSize("/"); ok {
+				idx.mu.Lock()
+				idx.UsedAsIndexed = size
+				idx.mu.Unlock()
+			}
+		}
+		if err := idx.SyncFolderSizesToDB(); err != nil {
+			return err
+		}
 		// All scanners completed
 		err := idx.db.ShrinkMemory()
 		if err != nil {
@@ -245,23 +270,33 @@ func (idx *Index) SendSourceUpdateEvent() error {
 // restoreFolderSizes loads the persisted directory sizes into the in-memory folderSizes map.
 // Quick scans iterate that map to decide which folders to stat, so leaving it empty after a
 // restart would make them blind until the next full scan.
-func (idx *Index) restoreFolderSizes() {
+func (idx *Index) restoreFolderSizes() error {
 	if idx.db == nil {
-		return
+		return nil
 	}
-	sizes, err := idx.db.LoadFolderSizes(idx.Name)
+	sizes, counts, err := idx.db.LoadFolderStats(idx.Name)
 	if err != nil {
-		logger.Errorf("[%s] Failed to load persisted folder sizes: %v", idx.Name, err)
-		return
+		return err
 	}
 	idx.folderSizesMu.Lock()
 	idx.folderSizes = sizes
+	idx.folderCounts = counts
 	idx.folderSizesMu.Unlock()
+	return nil
 }
 
 // setupMultiScanner creates and starts the multi-scanner system
 // isNewDb: if true, skip loading persisted complexity values (database is new or recreated)
 func (idx *Index) setupMultiScanner(isNewDb bool) {
+	if idx.isStopped() {
+		return
+	}
+	changed, err := idx.db.PrepareSource(idx.Name, idx.policyFingerprint(), idx.sizeOnly() || idx.includeHidden())
+	if err != nil {
+		idx.failInitialization(err)
+		return
+	}
+	isNewDb = isNewDb || changed
 	// Load persisted index-level stats from Bolt (complexity, numDirs/Files, used/usedAlt/total, etc.)
 	// Scanner-level stats below use a second GetByPath only for the Scanners map.
 	if err := idx.Load(); err != nil {
@@ -270,7 +305,14 @@ func (idx *Index) setupMultiScanner(isNewDb bool) {
 	// Quick scans only stat the directories present in folderSizes, which is in-memory only.
 	// Restoring it keeps change detection working after a restart without a full re-read.
 	if !isNewDb {
-		idx.restoreFolderSizes()
+		if err := idx.restoreFolderSizes(); err != nil {
+			idx.failInitialization(err)
+			return
+		}
+		if err := idx.restoreDirectoryStates(); err != nil {
+			idx.failInitialization(err)
+			return
+		}
 	}
 
 	idx.mu.Lock()
@@ -301,11 +343,15 @@ func (idx *Index) setupMultiScanner(isNewDb bool) {
 				rootScanner.numDirs = rootInfo.NumDirs
 				rootScanner.numFiles = rootInfo.NumFiles
 				rootScanner.lastScanned = rootInfo.LastScanned
-				rootScanner.fullScanCounter = utils.Clamp(rootInfo.FullScanCounter, 0, 4)
+				rootScanner.fullScanCounter = idx.restoreFullScanCounter(rootInfo.FullScanCounter)
 			})
 		}
 	}
 	idx.mu.Lock()
+	if idx.stopRequested {
+		idx.mu.Unlock()
+		return
+	}
 	idx.scanners["/"] = rootScanner
 	idx.schedulerStop = make(chan struct{})
 	idx.mu.Unlock()
@@ -330,7 +376,7 @@ func (idx *Index) setupMultiScanner(isNewDb bool) {
 					childScanner.numDirs = childInfo.NumDirs
 					childScanner.numFiles = childInfo.NumFiles
 					childScanner.lastScanned = childInfo.LastScanned
-					childScanner.fullScanCounter = utils.Clamp(childInfo.FullScanCounter, 0, 4)
+					childScanner.fullScanCounter = idx.restoreFullScanCounter(childInfo.FullScanCounter)
 				})
 			}
 		}
@@ -340,8 +386,19 @@ func (idx *Index) setupMultiScanner(isNewDb bool) {
 		idx.mu.Unlock()
 	}
 
+	idx.restoreDirectoryAggregates()
+	idx.restoreScannerCounters()
+	if idx.isStopped() {
+		return
+	}
+	idx.mu.Lock()
+	idx.Initialization = ""
+	idx.mu.Unlock()
 	idx.restoreScannerNextRuns()
 	go idx.runIndexScheduler()
+	if err := idx.SendSourceUpdateEvent(); err != nil {
+		logger.Warningf("notify restored index: %v", err)
+	}
 
 	logger.Debugf("Created %d scanners for [%v] (1 root + %d children)", len(topLevelDirs)+1, idx.Name, len(topLevelDirs))
 }
@@ -368,6 +425,7 @@ func (idx *Index) GetScannerStatus() map[string]interface{} {
 	status["activeScanner"] = activePath
 	status["isScanning"] = activePath != ""
 	status["status"] = idx.Status
+	status["indexing"] = idx.scanScheduleConfig()
 
 	// Individual scanner stats
 	scannerStats := make([]map[string]interface{}, 0, len(idx.scanners))

@@ -127,22 +127,15 @@ func StartFilebrowser() {
 		logger.Fatal("No sources configured, exiting...")
 	}
 
-	// Initialize shared index database before starting HTTP service
-	isNewDb, err := indexing.InitializeIndexDB()
-	if err != nil {
-		logger.Fatalf("Failed to initialize index database: %v", err)
-	}
-
-	// Index metadata persistence is wired from app.WireServices during initializeDatabase.
-	if isNewDb {
-		if err := state.ResetAllIndexComplexities(); err != nil {
-			logger.Errorf("Failed to reset index complexities: %v", err)
-		}
-	}
-
+	sources := make([]*settings.Source, 0, len(settings.Config.Server.SourceMap))
 	for _, source := range settings.Config.Server.SourceMap {
-		go indexing.Initialize(source, false, isNewDb)
+		sources = append(sources, source)
 	}
+	indexInitDone := indexing.StartBackgroundInitialization(ctx, sources, func() {
+		if err := state.ResetAllIndexComplexities(); err != nil {
+			logger.Errorf("reset index complexities: %v", err)
+		}
+	})
 	analytics.StartReporter()
 	validateUserInfo(!dbExists)
 	validateOfficeIntegration()
@@ -162,6 +155,13 @@ func StartFilebrowser() {
 		cancel() // Trigger context cancellation
 	case <-done:
 		logger.Info("Server stopped unexpectedly. Shutting down...")
+	}
+
+	cancel()
+	select {
+	case <-indexInitDone:
+	case <-time.After(2 * time.Second):
+		logger.Warning("Index initialization is still stopping; no new source scanners will be started")
 	}
 
 	// Stop all indexing scanners before closing the database

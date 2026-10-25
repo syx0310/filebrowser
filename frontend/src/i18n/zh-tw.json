@@ -43,6 +43,8 @@
     "requestTimedOut": "請求已超時。請檢查您的網路或反向代理設定。"
   },
   "files": {
+    "count": "檔案數",
+    "recursiveFileCount": "包含所有子目錄的檔案總數",
     "sortByCreationTime": "按建立時間排序",
     "creationTime": "建立時間",
     "emptyFile": "空檔案",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "多選模式已開啟",
     "sortByLastModified": "按最後修改時間排序",
     "sortByName": "按名稱排序",
+    "sortByCount": "按檔案數排序",
     "sortBySize": "按大小排序",
     "sortByType": "按類型排序",
     "noPreview": "此檔案無法預覽。",

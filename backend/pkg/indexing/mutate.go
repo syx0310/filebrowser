@@ -15,12 +15,46 @@ import (
 // UpdateMetadata persists a completed directory listing to the index. The directory row's has_preview
 // reflects direct previewable children only (see GetDirInfoCore).
 func (idx *Index) UpdateMetadata(info *iteminfo.FileInfo, scanner *Scanner, persistListedFolders bool) bool {
+	if idx.db == nil || (scanner == nil && idx.isInitializing()) {
+		return false
+	}
+	items := idx.directoryItems(info, scanner == nil || persistListedFolders)
+	if scanner == nil {
+		items[0].ScanState = &iteminfo.DirectoryScanState{}
+	}
+
+	if scanner != nil {
+		normalizedPath := utils.AddTrailingSlashIfNotExists(info.Path)
+		idx.mu.Lock()
+		if idx.scanUpdatedPaths == nil {
+			idx.scanUpdatedPaths = make(map[string]bool)
+		}
+		idx.scanUpdatedPaths[normalizedPath] = true
+		idx.mu.Unlock()
+
+		scanner.batchItems = append(scanner.batchItems, items...)
+		if len(scanner.batchItems) >= idx.db.BatchSize {
+			scanner.flushBatch()
+		}
+		return true
+	}
+
+	idx.metadataMu.Lock()
+	defer idx.metadataMu.Unlock()
+	if err := idx.db.BulkInsertItems(idx.Name, items); err != nil {
+		logger.Errorf("Failed to update metadata for %s: %v", info.Path, err)
+		return false
+	}
+	idx.applyDirectoryStates(items)
+	return true
+}
+
+func (idx *Index) directoryItems(info *iteminfo.FileInfo, persistListedFolders bool) []*iteminfo.FileInfo {
 	items := make([]*iteminfo.FileInfo, 0, len(info.Files)+len(info.Folders)+1)
 	dirItem := *info
 	items = append(items, &dirItem)
 
-	isBatchScan := scanner != nil
-	includeListedFolders := !isBatchScan || persistListedFolders
+	includeListedFolders := persistListedFolders
 
 	if includeListedFolders {
 		for i := range info.Folders {
@@ -43,28 +77,18 @@ func (idx *Index) UpdateMetadata(info *iteminfo.FileInfo, scanner *Scanner, pers
 		}
 		items = append(items, fileItem)
 	}
-
-	if scanner != nil {
-		normalizedPath := utils.AddTrailingSlashIfNotExists(info.Path)
-		idx.mu.Lock()
-		if idx.scanUpdatedPaths == nil {
-			idx.scanUpdatedPaths = make(map[string]bool)
+	if idx.sizeOnly() {
+		// API listings can still detect types for display. Persist only basic
+		// metadata in this mode, without retaining preview detection results.
+		for _, item := range items {
+			item.HasPreview = false
+			if item.Type != "directory" {
+				item.Type = "blob"
+			}
 		}
-		idx.scanUpdatedPaths[normalizedPath] = true
-		idx.mu.Unlock()
-
-		scanner.batchItems = append(scanner.batchItems, items...)
-		if len(scanner.batchItems) >= idx.db.BatchSize {
-			scanner.flushBatch()
-		}
-		return true
 	}
 
-	if err := idx.db.BulkInsertItems(idx.Name, items); err != nil {
-		logger.Errorf("Failed to update metadata for %s: %v", info.Path, err)
-		return false
-	}
-	return true
+	return items
 }
 
 // flushBatch writes all remaining batch items to the database (Scanner method)
@@ -78,9 +102,23 @@ func (s *Scanner) flushBatch() {
 		return
 	}
 
+	s.idx.metadataMu.Lock()
+	defer s.idx.metadataMu.Unlock()
 	err := s.idx.db.BulkInsertItems(s.idx.Name, items)
 	if err != nil {
+		s.scanFailed = true
 		logger.Warningf("[DB_TX] Flush failed for scanner [%s] (%d items): %v", s.scanPath, len(items), err)
+	}
+
+	if err == nil {
+		s.idx.applyDirectoryStates(items)
+		if s.fullSeen != nil {
+			for _, item := range items {
+				if item.ScanState != nil && item.ScanState.Valid {
+					s.fullSeen[item.Path] = true
+				}
+			}
+		}
 	}
 
 	// Clear hardlink tracking maps periodically to prevent unbounded memory growth
@@ -96,6 +134,9 @@ func (s *Scanner) flushBatch() {
 // DeleteMetadata removes the specified path from the index.
 // SQLite handles locking automatically, so no mutex needed.
 func (idx *Index) DeleteMetadata(path string, isDir bool, recursive bool) bool {
+	if idx.db == nil {
+		return true
+	}
 	// Normalize the path - ensure trailing slash for directories
 	indexPath := path
 	if isDir {
@@ -114,6 +155,9 @@ func (idx *Index) DeleteMetadata(path string, isDir bool, recursive bool) bool {
 
 // GetMetadataInfo retrieves the FileInfo from the specified file or directory in the index.
 func (idx *Index) GetReducedMetadata(target string, isDir bool) (*iteminfo.FileInfo, bool) {
+	if idx.db == nil || idx.isInitializing() {
+		return nil, false
+	}
 
 	checkPath := idx.MakeIndexPath(target, isDir).String()
 
@@ -130,6 +174,9 @@ func (idx *Index) GetReducedMetadata(target string, isDir bool) (*iteminfo.FileI
 
 	// If this is a directory, populate size from in-memory map (prefer in-memory over DB)
 	if item.Type == "directory" {
+		if count := idx.folderCount(checkPath); count != nil {
+			item.FileCount = count
+		}
 		dirPath := utils.AddTrailingSlashIfNotExists(checkPath)
 		inMemSize, exists := idx.GetFolderSize(dirPath)
 		if !exists {
@@ -145,6 +192,9 @@ func (idx *Index) GetReducedMetadata(target string, isDir bool) (*iteminfo.FileI
 
 // raw directory info retrieval -- does not work on files, only returns a directory
 func (idx *Index) GetMetadataInfo(target string, isDir bool, shallow bool) (*iteminfo.FileInfo, bool) {
+	if idx.db == nil || idx.isInitializing() {
+		return nil, false
+	}
 
 	var checkDir string
 	if !isDir {
@@ -181,6 +231,9 @@ func (idx *Index) GetMetadataInfo(target string, isDir bool, shallow bool) (*ite
 	// Populate Files and Folders
 	for _, child := range children {
 		if child.Type == "directory" {
+			if count := idx.folderCount(checkDir + child.Name + "/"); count != nil {
+				child.FileCount = count
+			}
 			// Populate directory size from in-memory map (prefer in-memory over DB)
 			childPath := utils.AddTrailingSlashIfNotExists(child.Path)
 			inMemSize, exists := idx.GetFolderSize(childPath)
@@ -200,6 +253,9 @@ func (idx *Index) GetMetadataInfo(target string, isDir bool, shallow bool) (*ite
 
 	// Populate the directory's own size from in-memory map (prefer in-memory over DB)
 	inMemSize, exists := idx.GetFolderSize(checkDir)
+	if count := idx.folderCount(checkDir); count != nil {
+		dir.FileCount = count
+	}
 	if !exists {
 		inMemSize = 0
 	}
@@ -240,7 +296,10 @@ func (idx *Index) ReadOnlyOperation(fn func()) {
 
 // IterateFiles iterates over all files in the index and calls the callback function
 func (idx *Index) IterateFiles(fn func(path, name string, size, modTime int64)) error {
-	rows, err := idx.db.Query("SELECT path, name, size, mod_time FROM index_items WHERE source = ? AND is_dir = 0", idx.Name)
+	if idx.db == nil {
+		return fmt.Errorf("index is initializing")
+	}
+	rows, err := idx.db.Query("SELECT path, name, size, mod_time FROM index_items WHERE source = ? AND is_dir = FALSE", idx.Name)
 	if err != nil {
 		return err
 	}
@@ -262,6 +321,16 @@ func GetIndexInfo(sourceName string, forceCacheRefresh bool) (ReducedIndex, erro
 	indexesMutex.Unlock()
 	if !ok {
 		return ReducedIndex{}, fmt.Errorf("index %s not found", sourceName)
+	}
+
+	if idx.db == nil || idx.isInitializing() {
+		idx.mu.RLock()
+		info := idx.ReducedIndex
+		info.Indexing = idx.scanScheduleConfig()
+		info.ReadOnly, info.Private = idx.Config.ReadOnly, idx.Config.Private
+		info.IndexingDisabled = idx.Config.ResolvedRules.IndexingDisabled
+		idx.mu.RUnlock()
+		return info, nil
 	}
 
 	// Only update disk total if cache is missing or explicitly forced.
@@ -312,6 +381,7 @@ func GetIndexInfo(sourceName string, forceCacheRefresh bool) (ReducedIndex, erro
 	adaptiveSched := idx.useAdaptiveScheduling()
 	scannerInfos := make([]*ScannerInfo, 0, len(idx.scanners))
 	for _, scanner := range idx.scanners {
+		scanner.statsMu.RLock()
 		schedule := 0
 		if adaptiveSched {
 			schedule = scanner.currentSchedule
@@ -319,17 +389,21 @@ func GetIndexInfo(sourceName string, forceCacheRefresh bool) (ReducedIndex, erro
 		scannerInfos = append(scannerInfos, &ScannerInfo{
 			Path:            scanner.scanPath,
 			CurrentSchedule: schedule,
+			NextScanUnix:    unixTimeOrZero(scanner.nextRun),
 			Stats: Stats{
-				LastScanned:   scanner.lastScanned,
-				Complexity:    scanner.complexity,
-				QuickScanTime: scanner.quickScanTime,
-				FullScanTime:  scanner.fullScanTime,
-				NumDirs:       scanner.numDirs,
-				NumFiles:      scanner.numFiles,
+				LastScanned:     scanner.lastScanned,
+				LastIndexedUnix: unixTimeOrZero(scanner.lastScanned),
+				Complexity:      scanner.complexity,
+				QuickScanTime:   scanner.quickScanTime,
+				FullScanTime:    scanner.fullScanTime,
+				NumDirs:         scanner.numDirs,
+				NumFiles:        scanner.numFiles,
 			},
 		})
+		scanner.statsMu.RUnlock()
 	}
 	reducedIdx := idx.ReducedIndex
+	reducedIdx.Indexing = idx.scanScheduleConfig()
 	reducedIdx.UsedAsIndexed = idx.UsedAsIndexed
 	reducedIdx.UsedDisk = idx.UsedDisk
 	reducedIdx.DiskTotal = idx.DiskTotal
@@ -344,7 +418,7 @@ func GetIndexInfo(sourceName string, forceCacheRefresh bool) (ReducedIndex, erro
 	reducedIdx.Complexity = idx.getComplexityUnlocked()
 	lastIndexed := idx.getLastIndexedUnlocked()
 	reducedIdx.LastScanned = lastIndexed
-	reducedIdx.LastIndexedUnix = lastIndexed.Unix()
+	reducedIdx.LastIndexedUnix = unixTimeOrZero(lastIndexed)
 	reducedIdx.Status = idx.getStatusUnlocked()
 	reducedIdx.ReadOnly = idx.Config.ReadOnly
 	reducedIdx.Private = idx.Config.Private

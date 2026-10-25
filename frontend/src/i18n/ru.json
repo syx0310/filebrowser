@@ -43,6 +43,8 @@
     "requestTimedOut": "Истекло время ожидания запроса. Проверьте настройки сети или обратного прокси-сервера."
   },
   "files": {
+    "count": "Количество",
+    "recursiveFileCount": "Количество файлов, включая подпапки",
     "sortByCreationTime": "Сортировать по времени создания",
     "creationTime": "Время создания",
     "emptyFile": "Пустой файл",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Мультивыбор включен",
     "sortByLastModified": "Сортировка по дате изменения",
     "sortByName": "Сортировка по имени",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Сортировка по размеру",
     "sortByType": "Сортировать по типу",
     "noPreview": "Предварительный просмотр для этого файла недоступен.",

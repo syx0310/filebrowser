@@ -216,6 +216,8 @@
     "requestTimedOut": "Изтече времето за изчакване на заявката. Проверете настройките на мрежата си или на обратния прокси сървър."
   },
   "files": {
+    "count": "Брой",
+    "recursiveFileCount": "Брой файлове, включително в подпапките",
     "sortByCreationTime": "Сортиране по време на създаване",
     "creationTime": "Време на създаване",
     "emptyFile": "Празен файл",
@@ -225,6 +227,7 @@
     "multipleSelectionEnabled": "Множествен избор е активиран",
     "sortByLastModified": "Сортиране по последна промяна",
     "sortByName": "Сортиране по име",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Сортиране по размер",
     "sortByType": "Сортиране по тип",
     "sortByDuration": "Сортиране по продължителност",

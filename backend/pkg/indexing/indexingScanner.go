@@ -3,7 +3,6 @@ package indexing
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +15,7 @@ import (
 type Scanner struct {
 	scanPath string
 
-	// Adaptive scheduling (see Index.useAdaptiveScheduling)
+	// Scheduling (adaptive tiers or a configured fixed interval)
 	currentSchedule int
 	calendarSlotSec int64     // UTC unix second in idx.scheduleSlots; 0 if not enrolled
 	nextRun         time.Time // next slot time; zero if not scheduled / due immediately
@@ -31,6 +30,11 @@ type Scanner struct {
 	numDirs       uint64
 	numFiles      uint64
 	statsMu       sync.RWMutex
+
+	baselineReady   bool // guarded by statsMu; false for legacy checkpoints
+	fullScanRunning bool // guarded by statsMu
+	fullSeen        map[string]bool
+	scanFailed      bool // owned by the single scanner execution
 
 	// Active scan session
 	scanStartTime int64
@@ -73,9 +77,15 @@ func (s *Scanner) executeScan() {
 		}
 	}()
 
-	if s.scanPath != "/" && !s.directoryExists() {
-		s.handlePathGone("pre-scan check")
-		return
+	if s.scanPath != "/" {
+		if _, err := os.Stat(utils.JoinUnderSourceRoot(s.idx.Path, s.scanPath)); err != nil {
+			if os.IsNotExist(err) {
+				_ = s.removeScannedDirectory(s.scanPath)
+			} else {
+				logger.Warningf("retain scanner %s: %v", s.scanPath, err)
+			}
+			return
+		}
 	}
 
 	s.prepareScanState()
@@ -84,14 +94,13 @@ func (s *Scanner) executeScan() {
 	s.idx.activeScannerPath = s.scanPath
 	s.idx.mu.Unlock()
 
-	// Cadence per scanner path: full when counter==0, then four quick scans, then wrap (5 runs per cycle).
-	var pre int
+	// Each scanner starts with a full scan, then N-1 quick scans before repeating.
 	var quick bool
 	s.withStatsLock(func() {
-		pre = s.fullScanCounter
-		quick = pre > 0 && pre < 5
+		s.fullScanCounter = s.idx.restoreFullScanCounter(s.fullScanCounter)
+		quick = s.fullScanCounter > 0
 		s.fullScanCounter++
-		if s.fullScanCounter >= 5 {
+		if s.fullScanCounter >= s.idx.fullScanEvery() {
 			s.fullScanCounter = 0
 		}
 	})
@@ -127,13 +136,25 @@ func (s *Scanner) runRootScan(quick bool) {
 	s.statsMu.Lock()
 	s.lastScanned = time.Now()
 	s.statsMu.Unlock()
-	s.checkForNewChildDirectories()
+	if !quick || s.filesChanged {
+		s.checkForNewChildDirectories()
+	}
 	if err := s.idx.db.ShrinkMemory(); err != nil {
 		logger.Errorf("Failed to shrink memory: %v", err)
 	}
 }
 
 func (s *Scanner) runFullScanRoot() {
+	s.scanFailed = false
+	s.fullSeen = make(map[string]bool)
+	var previousFiles, previousDirs uint64
+	s.withStatsLock(func() { previousFiles, previousDirs = s.numFiles, s.numDirs; s.fullScanRunning = true })
+	defer s.withStatsLock(func() {
+		s.fullScanRunning = false
+		if s.scanFailed {
+			s.numFiles, s.numDirs = previousFiles, previousDirs
+		}
+	})
 	config := Options{
 		Recursive:     false,
 		IsRoutineScan: true,
@@ -144,7 +165,7 @@ func (s *Scanner) runFullScanRoot() {
 		s.numDirs = 0
 		s.numFiles = 0
 	})
-	s.scanStartTime = time.Now().Unix()
+	s.scanStartTime = time.Now().UnixNano()
 	s.idx.mu.Lock()
 	if s.idx.scanSessionStartTime == 0 {
 		s.idx.scanSessionStartTime = s.scanStartTime
@@ -162,12 +183,11 @@ func (s *Scanner) runFullScanRoot() {
 
 	_, _, err := s.idx.indexDirectory("/", config, s)
 	if err != nil {
+		s.scanFailed = true
 		logger.Errorf("Root scanner error: %v", err)
 	}
 
-	s.flushBatch()
-	s.purgeStaleEntries(true, false) // isRoot=true, isQuickScan=false
-	s.syncStatsWithDB()
+	s.fullScanComplete(true)
 
 	s.resetHardlinkTracking()
 
@@ -180,53 +200,13 @@ func (s *Scanner) runFullScanRoot() {
 	s.idx.mu.Unlock()
 }
 
-func (s *Scanner) runQuickScanRoot() {
-	s.scanStartTime = time.Now().Unix()
-	s.withStatsLock(func() {
-		s.filesChanged = false
-	})
-
-	// Get root-level folders from folderSizes map
-	s.idx.folderSizesMu.RLock()
-	var foldersToCheck []string
-	for path := range s.idx.folderSizes {
-		// Root scanner: only check direct children (one slash after root, like "/subdir/")
-		if strings.Count(path, "/") == 2 && path != "/" {
-			foldersToCheck = append(foldersToCheck, path)
-		}
-	}
-	s.idx.folderSizesMu.RUnlock()
-
-	batchSize := s.idx.db.BatchSize
-	s.batchItems = make([]*iteminfo.FileInfo, 0, batchSize)
-
-	// Track stats
-	unchangedCount := 0
-	changedCount := 0
-	errorCount := 0
-
-	// Check each folder's modtime
-	for _, folderPath := range foldersToCheck {
-		changed, err := s.checkFolderModtime(folderPath)
-		if err != nil {
-			errorCount++
-		} else if changed {
-			changedCount++
-		} else {
-			unchangedCount++
-		}
-	}
-
-	s.flushBatch()
-	s.purgeStaleEntries(true, true) // isRoot=true, isQuickScan=true
-	s.syncStatsWithDB()
-}
+func (s *Scanner) runQuickScanRoot() { s.runQuickScan() }
 
 func (s *Scanner) runChildScan(quick bool) {
 	startTime := time.Now()
 
 	if quick {
-		// Quick scan: iterate folderSizes, check modtimes only (257x faster!)
+		// Quick scan: stat directories and reconcile only changed listings.
 		s.runQuickScanChild()
 		s.withStatsLock(func() {
 			s.quickScanTime = int(time.Since(startTime).Seconds())
@@ -246,6 +226,16 @@ func (s *Scanner) runChildScan(quick bool) {
 }
 
 func (s *Scanner) runFullScanChild() {
+	s.scanFailed = false
+	s.fullSeen = make(map[string]bool)
+	var previousFiles, previousDirs uint64
+	s.withStatsLock(func() { previousFiles, previousDirs = s.numFiles, s.numDirs; s.fullScanRunning = true })
+	defer s.withStatsLock(func() {
+		s.fullScanRunning = false
+		if s.scanFailed {
+			s.numFiles, s.numDirs = previousFiles, previousDirs
+		}
+	})
 	config := Options{
 		Recursive:     true,
 		IsRoutineScan: true,
@@ -256,7 +246,7 @@ func (s *Scanner) runFullScanChild() {
 		s.numDirs = 0
 		s.numFiles = 0
 	})
-	s.scanStartTime = time.Now().Unix()
+	s.scanStartTime = time.Now().UnixNano()
 	s.idx.mu.Lock()
 	if s.idx.scanSessionStartTime == 0 {
 		s.idx.scanSessionStartTime = s.scanStartTime
@@ -272,22 +262,25 @@ func (s *Scanner) runFullScanChild() {
 	batchSize := s.idx.db.BatchSize
 	s.batchItems = make([]*iteminfo.FileInfo, 0, batchSize)
 
-	_, _, err := s.idx.indexDirectory(s.scanPath, config, s)
+	previousSize, _ := s.idx.GetFolderSize(s.scanPath)
+	previousCount := s.idx.folderCount(s.scanPath)
+	size, _, err := s.idx.indexDirectory(s.scanPath, config, s)
 	if err != nil {
 		if isPathGone(err) {
 			s.handlePathGone("full scan")
 			return
 		}
+		s.scanFailed = true
 		logger.Errorf("Scanner [%s] error: %v", s.scanPath, err)
 	} else if config.Recursive && config.IsRoutineScan {
+		s.idx.updateFolderSizeAndParents(s.scanPath, uint64(size), previousSize, true)
+		s.idx.updateFolderCountAndParents(s.scanPath, s.idx.folderCount(s.scanPath), previousCount)
 		s.idx.mu.Lock()
 		s.idx.incrementScannerDirsUnlocked()
 		s.idx.mu.Unlock()
 	}
 
-	s.flushBatch()
-	s.purgeStaleEntries(false, false) // isRoot=false, isQuickScan=false
-	s.syncStatsWithDB()
+	s.fullScanComplete(false)
 
 	if s.scanPath != "/" {
 		if err := s.idx.SyncFolderSizesToDB(); err != nil {
@@ -306,54 +299,8 @@ func (s *Scanner) runFullScanChild() {
 	s.idx.mu.Unlock()
 }
 
-func (s *Scanner) runQuickScanChild() {
-	s.scanStartTime = time.Now().Unix()
-	s.withStatsLock(func() {
-		s.filesChanged = false
-	})
+func (s *Scanner) runQuickScanChild() { s.runQuickScan() }
 
-	// Get folders in this scanner's scope from folderSizes map
-	s.idx.folderSizesMu.RLock()
-	var foldersToCheck []string
-	// Scanner root must be modtime-checked: the loop below skips path == scanPath, but only
-	// checkFolderModtime compares modtime to lastScanned and re-reads the directory for new children.
-	foldersToCheck = append(foldersToCheck, s.scanPath)
-	for path := range s.idx.folderSizes {
-		// Child scanner: check all paths under its scope
-		if strings.HasPrefix(path, s.scanPath) && path != s.scanPath {
-			foldersToCheck = append(foldersToCheck, path)
-		}
-	}
-	s.idx.folderSizesMu.RUnlock()
-
-	batchSize := s.idx.db.BatchSize
-	s.batchItems = make([]*iteminfo.FileInfo, 0, batchSize)
-
-	// Track stats
-	unchangedCount := 0
-	changedCount := 0
-	errorCount := 0
-
-	// Check each folder's modtime
-	for _, folderPath := range foldersToCheck {
-		changed, err := s.checkFolderModtime(folderPath)
-		if err != nil {
-			errorCount++
-		} else if changed {
-			changedCount++
-		} else {
-			unchangedCount++
-		}
-	}
-
-	s.flushBatch()
-	s.purgeStaleEntries(false, true) // isRoot=false, isQuickScan=true
-	s.syncStatsWithDB()
-
-}
-
-// checkForNewChildDirectories detects new top-level directories and creates scanners for them
-// Also detects deleted directories and signals their scanners to stop
 func (s *Scanner) checkForNewChildDirectories() {
 	if s.scanPath != "/" {
 		return
@@ -361,6 +308,9 @@ func (s *Scanner) checkForNewChildDirectories() {
 
 	// Get current top-level directories from filesystem (already filtered by exclusion rules)
 	currentDirs := s.getTopLevelDirs()
+	if currentDirs == nil {
+		return
+	}
 	currentDirsMap := make(map[string]bool)
 	for _, dir := range currentDirs {
 		currentDirsMap[dir] = true
@@ -379,9 +329,13 @@ func (s *Scanner) checkForNewChildDirectories() {
 	for path := range existingScanners {
 		if !currentDirsMap[path] {
 			logger.Debugf("Directory [%s] no longer exists, removing scanner", path)
-			s.idx.mu.Lock()
-			delete(s.idx.scanners, path)
-			s.idx.mu.Unlock()
+			if err := s.removeScannedDirectoryWithPropagation(path, false); err != nil {
+				logger.Warningf("remove missing scanner %s: %v", path, err)
+				continue
+			}
+			if old := existingScanners[path]; old != nil {
+				old.removeSelf()
+			}
 		}
 	}
 
@@ -395,6 +349,7 @@ func (s *Scanner) checkForNewChildDirectories() {
 			s.idx.mu.Lock()
 			s.idx.scanners[dirPath] = newScanner
 			s.idx.mu.Unlock()
+			s.idx.registerScannerNextRun(newScanner, time.Now())
 		}
 	}
 }
@@ -405,14 +360,14 @@ func (s *Scanner) getTopLevelDirs() []string {
 	dir, err := os.Open(s.idx.Path)
 	if err != nil {
 		logger.Errorf("Failed to open root directory: %v", err)
-		return dirs
+		return nil
 	}
 	defer dir.Close()
 
-	files, err := dir.Readdir(-1)
+	files, err := dir.ReadDir(-1)
 	if err != nil {
 		logger.Errorf("Failed to read root directory: %v", err)
-		return dirs
+		return nil
 	}
 
 	for _, file := range files {
@@ -431,7 +386,10 @@ func (s *Scanner) getTopLevelDirs() []string {
 			continue
 		}
 		hidden := IsHidden(realPath)
-		isSymlink := file.Mode()&os.ModeSymlink != 0
+		if hidden && !s.idx.includeHidden() {
+			continue
+		}
+		isSymlink := file.Type()&os.ModeSymlink != 0
 		if s.idx.ShouldSkip(true, indexPath, hidden, isSymlink, true) {
 			logger.Debugf("Skipping scanner creation for excluded directory: %s", realPath)
 			continue
@@ -442,39 +400,37 @@ func (s *Scanner) getTopLevelDirs() []string {
 	return dirs
 }
 
-// updateSchedule adjusts the scanner's schedule based on whether files changed (adaptive mode only).
+// updateSchedule registers the next scan, adapting the tier only in automatic mode.
 func (s *Scanner) updateSchedule() {
-	if !s.idx.useAdaptiveScheduling() {
-		return
-	}
-
 	s.statsMu.Lock()
 
-	// Adjust schedule based on file changes
-	if s.filesChanged {
-		logger.Debugf("Scanner [%s] detected changes, adjusting schedule", s.scanPath)
-		// Floor at 40-minute tier (index 3)
-		if s.currentSchedule > 3 {
-			s.currentSchedule = 3
-		} else if s.currentSchedule > 0 {
-			s.currentSchedule--
+	if s.idx.useAdaptiveScheduling() {
+		// Adjust schedule based on file changes
+		if s.filesChanged {
+			logger.Debugf("Scanner [%s] detected changes, adjusting schedule", s.scanPath)
+			// Floor at 40-minute tier (index 3)
+			if s.currentSchedule > 3 {
+				s.currentSchedule = 3
+			} else if s.currentSchedule > 0 {
+				s.currentSchedule--
+			}
+		} else {
+			if s.currentSchedule < len(scanScheduleTiers)-1 {
+				s.currentSchedule++
+			}
 		}
-	} else {
-		if s.currentSchedule < len(scanScheduleTiers)-1 {
-			s.currentSchedule++
-		}
-	}
 
-	minTier, maxTier := scheduleTierBoundsForComplexity(s.complexity)
-	s.currentSchedule = utils.Clamp(s.currentSchedule, minTier, maxTier)
+		minTier, maxTier := scheduleTierBoundsForComplexity(s.complexity)
+		s.currentSchedule = utils.Clamp(s.currentSchedule, minTier, maxTier)
+	}
 	// Next slot must use the tier *after* adjustment; using the pre-change interval ignored
 	// speed-ups on filesChanged and could schedule the next run in the far future.
-	intervalForNext := scanScheduleDuration(s.currentSchedule)
+	tierForNext := s.currentSchedule
 	lastScanned := s.lastScanned
 	s.statsMu.Unlock()
 
 	now := time.Now()
-	nextRun := computeNextSlotTime(lastScanned, now, intervalForNext)
+	nextRun := s.idx.nextScanTime(lastScanned, now, tierForNext)
 
 	s.statsMu.Lock()
 	s.nextRun = nextRun
@@ -532,7 +488,9 @@ func (s *Scanner) handlePathGone(context string) {
 		return
 	}
 	logger.Infof("Scanner [%s] stopping (%s): directory no longer exists", s.scanPath, context)
-	s.removeSelf()
+	if err := s.removeScannedDirectory(s.scanPath); err != nil {
+		logger.Warningf("remove missing directory: %v", err)
+	}
 }
 
 // directoryExists checks if the scanner's directory still exists
@@ -541,7 +499,7 @@ func (s *Scanner) directoryExists() bool {
 	realPath = strings.TrimSuffix(realPath, "/")
 
 	_, err := os.Stat(realPath)
-	return err == nil
+	return err == nil || !os.IsNotExist(err)
 }
 
 // removeSelf removes this scanner from the index's scanner map
@@ -579,102 +537,6 @@ func (s *Scanner) syncStatsWithDB() {
 		s.numDirs = dirs
 		s.numFiles = files
 	})
-}
-
-// checkFolderModtime checks if a folder's modtime changed since last scan
-// Returns (changed, error) where changed=true if modtime is after lastScanned, false otherwise
-func (s *Scanner) checkFolderModtime(folderPath string) (bool, error) {
-	realPath := strings.TrimRight(s.idx.Path, "/") + folderPath
-	realPath = strings.TrimSuffix(realPath, "/")
-
-	info, err := os.Stat(realPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if folderPath == s.scanPath {
-				s.handlePathGone("quick scan")
-			}
-			// Subfolder deleted — stale entries are removed by purge
-			return false, nil
-		}
-		logger.Errorf("[QUICK_SCAN] Error stating %s: %v", folderPath, err)
-		return false, err
-	}
-
-	// Compare folder modtime against when the last scan started
-	// If modtime is after last scan, the folder has been modified
-	modtimeChanged := info.ModTime().After(s.lastScanned)
-
-	if modtimeChanged {
-		// Modtime changed - read directory contents and update database
-		s.withStatsLock(func() {
-			s.filesChanged = true
-		})
-
-		dir, err := os.Open(realPath)
-		if err != nil {
-			logger.Errorf("[QUICK_SCAN] Error opening %s: %v", folderPath, err)
-			return true, err
-		}
-		defer dir.Close()
-
-		opts := Options{
-			Recursive:     false, // Don't recurse - we're checking each folder individually
-			IsRoutineScan: true,
-		}
-
-		dirInfo, err := s.idx.GetDirInfo(dir, info, folderPath, opts, s)
-		if err != nil {
-			logger.Errorf("[QUICK_SCAN] Error getting dir info for %s: %v", folderPath, err)
-			return true, err
-		}
-
-		// Update metadata (will be batched)
-		s.idx.UpdateMetadata(dirInfo, s, true)
-
-		// Track this directory as having been updated (for file purge logic)
-		s.idx.mu.Lock()
-		if s.idx.scanUpdatedPaths == nil {
-			s.idx.scanUpdatedPaths = make(map[string]bool)
-		}
-		s.idx.scanUpdatedPaths[folderPath] = true
-		s.idx.mu.Unlock()
-
-		return true, nil
-	}
-
-	// Modtime unchanged - update last_updated to prevent folder from being purged
-	// Note: we DON'T add this folder to scanUpdatedPaths, so Phase 2 won't check its files
-	// BulkInsertItems overwrites all columns — preserve size/hasPreview/hidden from cache/DB, not hardcoded defaults.
-	var sizeForDB int64
-	if cached, ok := s.idx.GetFolderSize(folderPath); ok {
-		sizeForDB = int64(cached)
-	}
-	hasPreview := false
-	hidden := IsHidden(realPath)
-	if existing, ok := s.idx.GetReducedMetadata(folderPath, true); ok && existing != nil {
-		hasPreview = existing.HasPreview
-		hidden = existing.Hidden
-	}
-	fileInfo := &iteminfo.FileInfo{
-		Path: folderPath,
-		ItemInfo: iteminfo.ItemInfo{
-			Name:       filepath.Base(strings.TrimSuffix(folderPath, "/")),
-			Size:       sizeForDB,
-			Created:    getCreatedTime(info, realPath),
-			ModTime:    info.ModTime(),
-			Type:       "directory",
-			Hidden:     hidden,
-			HasPreview: hasPreview,
-		},
-	}
-
-	// Add to batch for bulk update
-	s.batchItems = append(s.batchItems, fileInfo)
-	if len(s.batchItems) >= s.idx.db.BatchSize {
-		s.flushBatch()
-	}
-
-	return false, nil
 }
 
 func (s *Scanner) purgeStaleEntries(isRoot bool, isQuickScan bool) {

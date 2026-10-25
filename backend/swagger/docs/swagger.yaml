@@ -40,6 +40,9 @@ definitions:
       created:
         description: filesystem birth time, nil when unavailable
         type: string
+      fileCount:
+        description: recursive file count for directories; nil until indexed
+        type: integer
       files:
         description: files in the directory with optional metadata
         items:
@@ -109,6 +112,9 @@ definitions:
       created:
         description: filesystem birth time, nil when unavailable
         type: string
+      fileCount:
+        description: recursive file count for directories; nil until indexed
+        type: integer
       hasPreview:
         description: whether the file has a thumbnail preview
         type: boolean
@@ -143,6 +149,9 @@ definitions:
       created:
         description: filesystem birth time, nil when unavailable
         type: string
+      fileCount:
+        description: recursive file count for directories; nil until indexed
+        type: integer
       files:
         description: files in the directory with optional metadata
         items:
@@ -183,6 +192,9 @@ definitions:
       created:
         description: filesystem birth time, nil when unavailable
         type: string
+      fileCount:
+        description: recursive file count for directories; nil until indexed
+        type: integer
       hasPreview:
         description: whether the file has a thumbnail preview
         type: boolean
@@ -498,9 +510,30 @@ definitions:
       disableReuse:
         description: enable to always create a new indexing database on startup.
         type: boolean
+      driver:
+        description: 'index storage backend (default: sqlite); the application database
+          remains SQLite'
+        enum:
+        - sqlite
+        - postgres
+        type: string
+      dsn:
+        description: 'secret: PostgreSQL connection string; prefer FILEBROWSER_INDEX_DSN'
+        type: string
+      includeHidden:
+        description: include hidden files and directories in indexing and size totals,
+          independently of UI visibility
+        type: boolean
+      mode:
+        description: 'full: includes type/preview detection; size: file/directory
+          sizes, timestamps and paths only'
+        enum:
+        - full
+        - size
+        type: string
       startupIntegrityCheck:
-        description: 'the method used to check the integrity of the index database
-          on startup (default: quickCheck)'
+        description: 'the method used to check the accessibility of the index database
+          on startup (default: probe; quickCheck performs a full check)'
         enum:
         - quickCheck
         - probe
@@ -510,6 +543,18 @@ definitions:
         description: enable the more complex WAL journaling mode. Slower, more memory
           usage, but better for deployments with constant user activity.
         type: boolean
+    type: object
+  settings.IndexingConfig:
+    properties:
+      fullScanEvery:
+        description: one full scan every N runs (default 5); 1 means always full;
+          0 inherits the global setting
+        minimum: 0
+        type: integer
+      scanInterval:
+        description: auto (default) uses adaptive scheduling; a duration such as 30m,
+          6h or 24h waits after each scan; minimum 1m; empty inherits the global setting
+        type: string
     type: object
   settings.Integrations:
     properties:
@@ -887,6 +932,10 @@ definitions:
         allOf:
         - $ref: '#/definitions/settings.IndexSqlConfig'
         description: Index database SQL configuration
+      indexing:
+        allOf:
+        - $ref: '#/definitions/settings.IndexingConfig'
+        description: default scan scheduling; sources may override individual settings
       logging:
         items:
           $ref: '#/definitions/settings.LogConfig'
@@ -1048,6 +1097,11 @@ definitions:
         description: disable the source, this is useful so you don't need to remove
           it from the config file
         type: boolean
+      indexing:
+        allOf:
+        - $ref: '#/definitions/settings.IndexingConfig'
+        description: per-source scan scheduling overrides server.indexing and global
+          environment defaults
       private:
         description: designate as source as private -- currently just means no sharing
           permitted.

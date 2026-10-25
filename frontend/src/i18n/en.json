@@ -216,6 +216,8 @@
     "requestTimedOut": "The request timed out. Check your network or reverse proxy settings."
   },
   "files": {
+    "count": "Count",
+    "recursiveFileCount": "Number of files, including subfolders",
     "emptyFile": "Empty file",
     "lastModified": "Last modified{suffix}",
     "duration": "Duration{suffix}",
@@ -223,6 +225,7 @@
     "multipleSelectionEnabled": "Multiple selection enabled",
     "sortByLastModified": "Sort by last modified",
     "sortByName": "Sort by name",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Sort by size",
     "sortByType": "Sort by type",
     "sortByDuration": "Sort by duration",

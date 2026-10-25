@@ -81,6 +81,8 @@ a pop-up menu.
 
 ## Official Docs
 
+Local configuration guide: [PostgreSQL indexing, size-only mode and hidden files](docs/indexing.md).
+
 See the [Official Docs](https://filebrowserquantum.com/). Contributions are welcome and encouraged! See [FilebrowserDocs Github](https://github.com/quantumx-apps/filebrowserDocs).
 
 ## Comparison Chart

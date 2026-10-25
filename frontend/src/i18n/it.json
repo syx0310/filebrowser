@@ -216,6 +216,8 @@
     "requestTimedOut": "La richiesta ha superato il limite di tempo. Controlla le impostazioni di rete o del proxy inverso."
   },
   "files": {
+    "count": "Conteggio",
+    "recursiveFileCount": "Numero di file, incluse le sottocartelle",
     "sortByCreationTime": "Ordina per data di creazione",
     "creationTime": "Data di creazione",
     "emptyFile": "File vuoto",
@@ -225,6 +227,7 @@
     "multipleSelectionEnabled": "Selezione multipla abilitata",
     "sortByLastModified": "Ordina per ultima modifica",
     "sortByName": "Ordina per nome",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Ordina per dimensione",
     "sortByType": "Ordina per tipo",
     "sortByDuration": "Ordina per durata",

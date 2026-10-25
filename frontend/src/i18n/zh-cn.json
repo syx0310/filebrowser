@@ -43,6 +43,8 @@
     "requestTimedOut": "请求超时。请检查您的网络或反向代理设置。"
   },
   "files": {
+    "count": "文件数",
+    "recursiveFileCount": "包含所有子目录的文件总数",
     "sortByCreationTime": "按创建时间排序",
     "creationTime": "创建时间",
     "emptyFile": "空文件",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "多选模式已开启",
     "sortByLastModified": "按最后修改时间排序",
     "sortByName": "按名称排序",
+    "sortByCount": "按文件数排序",
     "sortBySize": "按大小排序",
     "sortByType": "按类型排序",
     "noPreview": "此文件无法预览。",

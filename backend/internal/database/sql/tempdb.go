@@ -18,8 +18,8 @@ import (
 const (
 	// soft heap limit in bytes
 	defaultSoftHeapLimitBytes = 32 * 1024 * 1024 // 32MB
-	// Pager cache target expressed as number of 4KB pages (negative = pages).
-	defaultCacheSizePages = -4096 // ~16MB
+	// Pager cache target expressed as number of 4KB pages (negative = KiB).
+	defaultCacheSizePages = -4096 // ~4MB
 )
 
 func init() {
@@ -34,6 +34,7 @@ func init() {
 // to stream large datasets without loading everything into memory.
 // This can be used by any part of the codebase that needs temporary SQLite storage.
 type TempDB struct {
+	postgres  bool
 	db        *sql.DB
 	path      string
 	mu        sync.Mutex
@@ -48,9 +49,9 @@ type TempDBConfig struct {
 	// Default: 2500
 	BatchSize int
 
-	// CacheSizeKB is the page cache size in KB. Negative values are in pages.
-	// For one-time databases, a smaller cache (e.g., -4096 = ~16MB) is often sufficient.
-	// Default: -4096 (approximately 16MB)
+	// CacheSizeKB is the page cache size in KB. Negative values are in KiB.
+	// For one-time databases, a smaller cache (e.g., -4096 = ~4MB) is often sufficient.
+	// Default: -4096 (approximately 4MB)
 	CacheSizeKB int
 
 	// MmapSize is the memory-mapped I/O size in bytes. Set to 0 to disable mmap.
@@ -123,7 +124,7 @@ type TempDBConfig struct {
 func mergeConfig(provided *TempDBConfig) *TempDBConfig {
 	defaults := &TempDBConfig{
 		BatchSize:   2500,
-		CacheSizeKB: defaultCacheSizePages, // ~16MB pager cache
+		CacheSizeKB: defaultCacheSizePages, // ~4MB pager cache
 		MmapSize:    0,                     // Disable mmap to keep RSS predictable
 		Synchronous: "OFF",
 		TempStore:   "FILE", // Default to FILE, not MEMORY
@@ -249,14 +250,10 @@ func NewTempDB(id string, config ...*TempDBConfig) (*TempDB, error) {
 		db.SetMaxIdleConns(1)
 	}
 
-	// Calculate cache_size in pages (negative value) to ensure consistent unit handling
-	// SQLite's cache_size: positive = KB, negative = pages
-	// When using positive KB values, SQLite seems to have issues with cache_spill being less than cache_size
-	// So we convert to pages (negative) to ensure both cache_size and cache_spill use the same units
+	// SQLite uses negative KiB or positive pages for cache_size.
 	cacheSizeInPages := cfg.CacheSizeKB
 	if cfg.CacheSizeKB > 0 {
-		// Convert KB to pages: KB / 4 = pages, then negate to indicate pages
-		cacheSizeInPages = -(cfg.CacheSizeKB / 4)
+		cacheSizeInPages = -cfg.CacheSizeKB
 	}
 
 	basePragmas := []struct {
@@ -392,6 +389,9 @@ func (t *TempDB) BeginTransaction() (*sql.Tx, error) {
 // Exec executes a SQL statement that doesn't return rows.
 // This is a convenience method that handles locking.
 func (t *TempDB) Exec(query string, args ...interface{}) (sql.Result, error) {
+	if t.postgres {
+		return t.db.Exec(bindPostgres(query), args...)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.db.Exec(query, args...)
@@ -400,6 +400,9 @@ func (t *TempDB) Exec(query string, args ...interface{}) (sql.Result, error) {
 // Query executes a query that returns rows.
 // This is a convenience method that handles locking.
 func (t *TempDB) Query(query string, args ...interface{}) (*sql.Rows, error) {
+	if t.postgres {
+		return t.db.Query(bindPostgres(query), args...)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.db.Query(query, args...)
@@ -408,6 +411,9 @@ func (t *TempDB) Query(query string, args ...interface{}) (*sql.Rows, error) {
 // QueryRow executes a query that is expected to return at most one row.
 // This is a convenience method that handles locking.
 func (t *TempDB) QueryRow(query string, args ...interface{}) *sql.Row {
+	if t.postgres {
+		return t.db.QueryRow(bindPostgres(query), args...)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.db.QueryRow(query, args...)
@@ -472,10 +478,10 @@ func verifyPragmaSettings(db *sql.DB, cfg *TempDBConfig) error {
 		return fmt.Errorf("failed to read auto_vacuum: %w", err)
 	}
 
-	// Convert cache_size from pages to KB (negative = pages, positive = KB)
-	cacheSizeKB := cacheSize
+	// Convert cache_size from pages to KB (negative = KiB, positive = pages)
+	cacheSizeKB := cacheSize * int64(cfg.PageSize) / 1024
 	if cacheSize < 0 {
-		cacheSizeKB = -cacheSize * 4 // pages * 4KB per page
+		cacheSizeKB = -cacheSize
 	}
 
 	// Expected cache_spill value in pages (cache_spill is always specified and returned in pages)
@@ -516,7 +522,7 @@ func verifyPragmaSettings(db *sql.DB, cfg *TempDBConfig) error {
 	if cfg.CacheSizeKB != 0 {
 		expectedCache := int64(cfg.CacheSizeKB)
 		if expectedCache < 0 {
-			expectedCache = -expectedCache * 4 // Convert pages to KB
+			expectedCache = -expectedCache
 		}
 		if cacheSizeKB != expectedCache {
 			logger.Warningf("[SQLITE_CONFIG] cache_size mismatch: got %d KB, expected %d KB", cacheSizeKB, expectedCache)

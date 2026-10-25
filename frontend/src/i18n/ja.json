@@ -43,6 +43,8 @@
     "requestTimedOut": "リクエストがタイムアウトしました。ネットワークまたはリバースプロキシの設定を確認してください。"
   },
   "files": {
+    "count": "ファイル数",
+    "recursiveFileCount": "サブフォルダー内も含めたファイル数",
     "sortByCreationTime": "作成日時で並べ替え",
     "creationTime": "作成日時",
     "emptyFile": "空のファイル",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "複数選択有効",
     "sortByLastModified": "最終変更日付によるソート",
     "sortByName": "名前によるソート",
+    "sortByCount": "Sort by file count",
     "sortBySize": "サイズによるソート",
     "sortByType": "種類で並べ替え",
     "noPreview": "このファイルではプレビューは利用できません。",

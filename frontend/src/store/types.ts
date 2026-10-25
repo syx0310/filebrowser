@@ -6,6 +6,7 @@ export interface FileListItem {
   name: string;
   path: string;
   size?: number;
+  fileCount?: number;
   type?: string;
   source?: string;
   modified?: string;
@@ -32,6 +33,7 @@ export interface ReqObject {
   name?: string;
   path?: string;
   size?: number;
+  fileCount?: number;
   type?: string;
   source?: string;
   content?: string;
@@ -345,6 +347,7 @@ export interface StoreState {
       path: string;
       source: string;
       size?: number;
+      fileCount?: number;
       type: string;
       viewToken?: string;
       parentDirItems?: FileListItem[];

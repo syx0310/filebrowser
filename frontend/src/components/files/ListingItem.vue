@@ -64,6 +64,7 @@
       <p v-else class="name">
         <span :title="nameTitle">{{ displayName }}</span>
       </p>
+      <p v-if="showCountColumn" class="count" :title="$t('files.recursiveFileCount')" :data-label="$t('files.count')">{{ formattedFileCount }}</p>
       <p class="size" :data-order="humanSize">{{ humanSize }}</p>
       <p class="modified" :title="modifiedTitle"><time :datetime="modified">{{ formattedTime }}</time></p>
       <p v-if="showKindColumn" class="kind">{{ kindLabel }}</p>
@@ -145,6 +146,7 @@
       <p v-else class="name">
         <span :title="nameTitle">{{ displayName }}</span>
       </p>
+      <p v-if="showCountColumn" class="count" :title="$t('files.recursiveFileCount')" :data-label="$t('files.count')">{{ formattedFileCount }}</p>
       <p class="size" :data-order="humanSize">{{ humanSize }}</p>
       <p class="modified" :title="modifiedTitle"><time :datetime="modified">{{ formattedTime }}</time></p>
       <p v-if="showKindColumn" class="kind">{{ kindLabel }}</p>
@@ -199,6 +201,7 @@ export default {
     source: String,
     type: String,
     size: Number,
+    fileCount: Number,
     modified: String,
     created: String,
     index: [Number, String],
@@ -416,6 +419,13 @@ export default {
     },
     formattedDuration() {
       return formatDuration(this.metadata?.duration);
+    },
+    showCountColumn() {
+      return this.isListMode && !this.showLimitedOptions;
+    },
+    formattedFileCount() {
+      if (!this.isDir || this.fileCount === undefined || this.fileCount === null) return "—";
+      return this.fileCount.toLocaleString(state.user?.locale || undefined);
     },
     showKindColumn() {
       return this.isListMode && !this.showLimitedOptions && state.user?.showTypeColumn;

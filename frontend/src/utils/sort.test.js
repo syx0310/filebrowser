@@ -3,6 +3,33 @@ import { sortedItems } from './sort.ts';
 
 describe('testSort', () => {
 
+  it('sorts recursive file counts numerically, keeping unknown counts last in either direction', () => {
+    const input = [
+      { name: "unknown" },
+      { name: "ten", fileCount: 10 },
+      { name: "empty", fileCount: 0 },
+      { name: "two", fileCount: 2 },
+      { name: "pending", fileCount: null },
+      { name: "large", fileCount: 28564543 },
+    ];
+    expect(sortedItems([...input], "fileCount", true).map((i) => i.name))
+      .toEqual(["empty", "two", "ten", "large", "pending", "unknown"]);
+    expect(sortedItems([...input], "fileCount", false).map((i) => i.name))
+      .toEqual(["large", "ten", "two", "empty", "pending", "unknown"]);
+  });
+
+  it('preserves pinned priority and uses natural names for equal or unavailable counts', () => {
+    const input = [
+      { name: "folder10", fileCount: 2 },
+      { name: "folder2", fileCount: 2 },
+      { name: "file10.txt" },
+      { name: "file2.txt" },
+      { name: "pinned", pinned: true, fileCount: 1 },
+    ];
+    expect(sortedItems(input, "fileCount", false).map((i) => i.name))
+      .toEqual(["pinned", "folder2", "folder10", "file2.txt", "file10.txt"]);
+  });
+
   it('sort items by name correctly', () => {
     const input = [
       { name: "zebra" },

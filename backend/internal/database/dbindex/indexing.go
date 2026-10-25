@@ -39,5 +39,5 @@ type PersistedScannerInfo struct {
 	QuickScanTime   int       `json:"quickScanTime"`
 	FullScanTime    int       `json:"fullScanTime"`
 	LastScanned     time.Time `json:"lastScanned"`
-	FullScanCounter int       `json:"fullScanCounter"` // 0-4: position in 1 full + 4 quick cycle before next executeScan
+	FullScanCounter int       `json:"fullScanCounter"` // position in configured full/quick cycle; zero means full scan next
 }

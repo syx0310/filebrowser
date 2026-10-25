@@ -16,6 +16,22 @@
     </p>
 
     <p
+      v-if="showCountColumn"
+      :class="{ active: countSorted }"
+      class="count"
+      role="button"
+      tabindex="0"
+      @click="sort('fileCount')"
+      @keydown.enter.prevent="sort('fileCount')"
+      @keydown.space.prevent="sort('fileCount')"
+      :title="$t('files.sortByCount')"
+      :aria-label="$t('files.sortByCount')"
+    >
+      <i class="material-symbols">{{ countIcon }}</i>
+      <span>{{ $t("files.count") }}</span>
+    </p>
+
+    <p
       :class="{ active: sizeSorted }"
       class="size"
       role="button"
@@ -130,6 +146,9 @@ export default {
     sizeSorted() {
       return this.sortConfig.by === "size";
     },
+    countSorted() {
+      return this.sortConfig.by === "fileCount";
+    },
     modifiedSorted() {
       return this.sortConfig.by === "modified";
     },
@@ -152,6 +171,9 @@ export default {
       const mode = getters.viewMode();
       return mode === "list" || mode === "compact";
     },
+    showCountColumn() {
+      return this.isListMode && !this.usePickerSorting && !this.useNavigationSorting;
+    },
     showKindColumn() {
       return this.isListMode && !this.usePickerSorting && !this.useNavigationSorting && state.user?.showTypeColumn;
     },
@@ -169,6 +191,9 @@ export default {
         return "arrow_downward";
       }
       return "arrow_upward";
+    },
+    countIcon() {
+      return this.countSorted && this.ascOrdered ? "arrow_downward" : "arrow_upward";
     },
     modifiedIcon() {
       if (this.modifiedSorted && this.ascOrdered) {
@@ -213,6 +238,7 @@ export default {
       if (
         (field === "name" && this.nameIcon === "arrow_upward") ||
         (field === "size" && this.sizeIcon === "arrow_upward") ||
+        (field === "fileCount" && this.countIcon === "arrow_upward") ||
         (field === "modified" && this.modifiedIcon === "arrow_upward") ||
         (field === "created" && this.createdIcon === "arrow_upward") ||
         (field === "kind" && this.kindIcon === "arrow_upward") ||
@@ -274,6 +300,7 @@ span {
   min-width: 0;
 }
 
+.count,
 .size,
 .modified,
 .duration {
@@ -300,6 +327,7 @@ span {
   width: calc(var(--listing-col-gap) + 2.4rem);
 }
 
+.desktop-view .count,
 .desktop-view .size,
 .desktop-view .modified,
 .desktop-view .kind,
@@ -309,6 +337,10 @@ span {
   padding-left: var(--listing-col-gap);
   justify-content: flex-end;
   text-align: right;
+}
+
+.desktop-view .count {
+  width: var(--listing-col-count);
 }
 
 .desktop-view .size {

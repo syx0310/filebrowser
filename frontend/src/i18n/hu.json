@@ -43,6 +43,8 @@
     "requestTimedOut": "A kérés időtúllépése történt. Ellenőrizze a hálózati vagy a fordított proxy beállításait."
   },
   "files": {
+    "count": "Darabszám",
+    "recursiveFileCount": "Fájlok száma az almappákkal együtt",
     "sortByCreationTime": "Rendezés létrehozási idő szerint",
     "creationTime": "Létrehozási idő",
     "emptyFile": "Üres fájl",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Többszörös kijelölés aktiválva",
     "sortByLastModified": "Rendezés utolsó módosítás szerint",
     "sortByName": "Rendezés név szerint",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Rendezés méret szerint",
     "sortByType": "Rendezés típus szerint",
     "noPreview": "Ehhez a fájlhoz nincs előnézet.",

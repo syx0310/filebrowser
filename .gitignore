@@ -52,8 +52,15 @@ frontend/.tmp-icons-*
 node_modules
 
 # local env files
+.env
+.env.*
+!.env.example
+!.env.*.example
 .env.local
 .env.*.local
+
+# Local PostgreSQL deployment config; publish compose.pg.example.yaml instead.
+/docs/compose.pg.yaml
 
 # Log files
 npm-debug.log*

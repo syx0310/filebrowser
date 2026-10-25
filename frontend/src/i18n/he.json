@@ -43,6 +43,8 @@
     "requestTimedOut": "הבקשה פקעה. בדוק את הגדרות הרשת או את הגדרות ה-proxy ההפוך."
   },
   "files": {
+    "count": "כמות",
+    "recursiveFileCount": "מספר הקבצים, כולל תיקיות משנה",
     "sortByCreationTime": "מיון לפי זמן יצירה",
     "creationTime": "זמן יצירה",
     "emptyFile": "קובץ ריק",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "בחירה מרובה מופעלת",
     "sortByLastModified": "מיין לפי השינוי האחרון",
     "sortByName": "מיין לפי שם",
+    "sortByCount": "Sort by file count",
     "sortBySize": "מיין לפי גודל",
     "sortByType": "מיין לפי סוג",
     "noPreview": "תצוגה מקדימה לא זמינה לקובץ זה",

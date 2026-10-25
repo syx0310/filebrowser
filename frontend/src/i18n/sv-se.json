@@ -43,6 +43,8 @@
     "requestTimedOut": "Begäran gick ut. Kontrollera dina nätverksinställningar eller inställningarna för omvänd proxy."
   },
   "files": {
+    "count": "Antal",
+    "recursiveFileCount": "Antal filer, inklusive undermappar",
     "sortByCreationTime": "Sortera efter skapandetid",
     "creationTime": "Skapandetid",
     "emptyFile": "Tom fil",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Flerval är på",
     "sortByLastModified": "Sortera på senast ändrad",
     "sortByName": "Sortera på namn",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Sortera på storlek",
     "sortByType": "Sortera efter typ",
     "noPreview": "Förhandsgranskning är inte tillgänglig för den här filen.",

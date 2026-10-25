@@ -14,6 +14,19 @@ export function sortedItems<T extends SortableItem>(items: T[] = [], sortby = "n
       return aPinned ? -1 : 1;
     }
 
+    if (sortby === "fileCount") {
+      const countA = typeof a.fileCount === "number" && Number.isFinite(a.fileCount) && a.fileCount >= 0 ? a.fileCount : null;
+      const countB = typeof b.fileCount === "number" && Number.isFinite(b.fileCount) && b.fileCount >= 0 ? b.fileCount : null;
+      // Missing counts are unscanned, not empty. Keep them after known counts
+      // in either direction, with natural name ordering for ties and files.
+      if (countA === null && countB !== null) return 1;
+      if (countA !== null && countB === null) return -1;
+      if (countA !== null && countB !== null && countA !== countB) {
+        return asc ? countA - countB : countB - countA;
+      }
+      return collator.compare(String(a.name ?? ""), String(b.name ?? ""));
+    }
+
     let valueA = getObjectProperty(a, sortby) as string | number;
     let valueB = getObjectProperty(b, sortby) as string | number;
 

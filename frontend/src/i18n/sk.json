@@ -43,6 +43,8 @@
     "requestTimedOut": "Došlo k časovému limitu požiadavky. Skontrolujte nastavenia siete alebo reverzného proxy."
   },
   "files": {
+    "count": "Počet",
+    "recursiveFileCount": "Počet súborov vrátane podpriečinkov",
     "sortByCreationTime": "Radiť podľa času vytvorenia",
     "creationTime": "Čas vytvorenia",
     "emptyFile": "Prázdny súbor",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Zapnutý viacnásobný výber",
     "sortByLastModified": "Zoradiť podľa dátumu",
     "sortByName": "Zoradiť podľa názvu",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Zoradiť podľa veľkosti",
     "sortByType": "Zoradiť podľa typu",
     "noPreview": "Pre tento súbor nie je dostupný náhľad.",

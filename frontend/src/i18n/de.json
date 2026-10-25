@@ -43,6 +43,8 @@
     "requestTimedOut": "Die Anfrage ist abgelaufen. Überprüfen Sie Ihre Netzwerk- oder Reverse-Proxy-Einstellungen."
   },
   "files": {
+    "count": "Anzahl",
+    "recursiveFileCount": "Anzahl der Dateien einschließlich Unterordner",
     "sortByCreationTime": "Nach Erstellungszeit sortieren",
     "creationTime": "Erstellungszeit",
     "emptyFile": "Leere Datei",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Mehrfachauswahl aktiviert",
     "sortByLastModified": "Nach Änderungsdatum sortieren",
     "sortByName": "Nach Namen sortieren",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Nach Größe sortieren",
     "sortByType": "Nach Typ sortieren",
     "noPreview": "Für diese Datei ist keine Vorschau verfügbar.",

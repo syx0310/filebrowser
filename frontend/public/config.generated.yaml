@@ -41,6 +41,9 @@ server:
         defaultEnabled: true              # should be added as a default source for new users?
         createUserDir: false              # create a user directory for each user under defaultUserScope + username
         useLogicalSize: false             # calculate sizes based on logical size instead of disk utilization (du -sh), folders will be 0 bytes when empty.
+        indexing:                         # per-source scan scheduling overrides server.indexing and global environment defaults
+          scanInterval: ""                # auto (default) uses adaptive scheduling; a duration such as 30m, 6h or 24h waits after each scan; minimum 1m; empty inherits the global setting
+          fullScanEvery: 0                # one full scan every N runs (default 5); 1 means always full; 0 inherits the global setting  validate:gte=0
         defaultPermissions:               # DefaultPermissions is the template for new user scopes on this source (also synced globally via Access settings).
           view: false
           download: false
@@ -55,11 +58,18 @@ server:
     createFilePermission: "644"           # Unix permissions like 644, 755, 2755 (default: 644)  validate:required,file_permission
     createDirectoryPermission: "755"      # Unix permissions like 755, 2755, 1777 (default: 755)  validate:required,file_permission
   indexSqlConfig:                         # Index database SQL configuration
+    driver: "sqlite"                      # index storage backend (default: sqlite); the application database remains SQLite  validate:omitempty,oneof=sqlite postgres
+    dsn: ""                               # secret: PostgreSQL connection string; prefer FILEBROWSER_INDEX_DSN
+    mode: "full"                          # full: includes type/preview detection; size: file/directory sizes, timestamps and paths only  validate:omitempty,oneof=full size
+    includeHidden: false                  # include hidden files and directories in indexing and size totals, independently of UI visibility
     batchSize: 1000                       # number of items to batch in a single transaction, typically 500-5000. higher = faster but could use more memory.
     cacheSizeMB: 32                       # size of the SQLite cache in MB
     walMode: false                        # enable the more complex WAL journaling mode. Slower, more memory usage, but better for deployments with constant user activity.
     disableReuse: false                   # enable to always create a new indexing database on startup.
-    startupIntegrityCheck: "quickCheck"   # the method used to check the integrity of the index database on startup (default: quickCheck)  validate:omitempty,oneof=quickCheck probe off
+    startupIntegrityCheck: "probe"        # the method used to check the accessibility of the index database on startup (default: probe; quickCheck performs a full check)  validate:omitempty,oneof=quickCheck probe off
+  indexing:                               # default scan scheduling; sources may override individual settings
+    scanInterval: "auto"                  # auto (default) uses adaptive scheduling; a duration such as 30m, 6h or 24h waits after each scan; minimum 1m; empty inherits the global setting
+    fullScanEvery: 5                      # one full scan every N runs (default 5); 1 means always full; 0 inherits the global setting  validate:gte=0
   database:                               # SQLite database configuration
     path: "filebrowser.sqlite"            # path to SQLite database file
     migrateFrom: ""                       # path to legacy database file for migration (optional)

@@ -24,7 +24,7 @@ func TestNormalizeStartupIntegrityMode(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"", settings.IndexStartupIntegrityQuickCheck},
+		{"", settings.IndexStartupIntegrityProbe},
 		{"quickCheck", settings.IndexStartupIntegrityQuickCheck},
 		{"probe", settings.IndexStartupIntegrityProbe},
 		{"off", settings.IndexStartupIntegrityOff},

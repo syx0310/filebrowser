@@ -43,6 +43,8 @@
     "requestTimedOut": "İstek zaman aşımına uğradı. Ağ ayarlarınızı veya ters proxy ayarlarınızı kontrol edin."
   },
   "files": {
+    "count": "Sayı",
+    "recursiveFileCount": "Alt klasörler dahil dosya sayısı",
     "sortByCreationTime": "Oluşturma zamanına göre sırala",
     "creationTime": "Oluşturma zamanı",
     "emptyFile": "Boş dosya",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "Çoklu seçim etkin",
     "sortByLastModified": "Güncelleme tarihine göre sırala",
     "sortByName": "İsme göre sırala",
+    "sortByCount": "Sort by file count",
     "sortBySize": "Boyuta göre sırala",
     "sortByType": "Türe göre sırala",
     "noPreview": "Bu dosya için önizleme kullanılamıyor.",

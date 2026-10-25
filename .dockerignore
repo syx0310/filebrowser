@@ -15,3 +15,11 @@ backend/vendor/**
 frontend/dist/**
 frontend/node_modules/**
 frontend/pkg/**
+
+# Keep local credentials, deployment files and Git history out of build contexts.
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+docs/compose.pg.yaml

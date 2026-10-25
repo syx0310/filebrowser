@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/gtsteffaniak/filebrowser/backend/internal/database/sqlitebusy"
-	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 	"github.com/gtsteffaniak/filebrowser/backend/pkg/indexing/iteminfo"
+	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 	"github.com/gtsteffaniak/go-logger/logger"
 )
 
-// IndexDB manages the SQLite database for the file index.
-// It wraps the underlying sql.DB connection and provides type-safe methods.
+var errIndexRecreated = errors.New("database was corrupted and deleted - will be recreated")
+
+// IndexDB wraps the selected file-index SQL backend.
 type IndexDB struct {
 	*TempDB
 }
@@ -94,6 +95,10 @@ func NewIndexDB(name string, journalMode string, batchSize int, cacheSizeMB int,
 	if !disableReuse {
 		mode := normalizeStartupIntegrityMode(settings.Config.Server.IndexSqlConfig.StartupIntegrityCheck)
 		if err := idxDB.runStartupIntegrityCheck(mode); err != nil {
+			if !errors.Is(err, errIndexRecreated) {
+				idxDB.Close()
+				return nil, false, err
+			}
 			// Database was recreated due to corruption
 			logger.Warningf("[DB_INIT] SQLite database was found with issues which could be due to a dirty shutdown, recreating: tmp/index_%s.db", name)
 			isNewDb = true
@@ -111,15 +116,14 @@ func NewIndexDB(name string, journalMode string, batchSize int, cacheSizeMB int,
 		idxDB.Close()
 		return nil, false, err
 	}
-	go idxDB.startPeriodicCleanup()
 	return idxDB, isNewDb, nil
 }
 
 func normalizeStartupIntegrityMode(m string) string {
 	switch m {
-	case "", settings.IndexStartupIntegrityQuickCheck:
+	case settings.IndexStartupIntegrityQuickCheck:
 		return settings.IndexStartupIntegrityQuickCheck
-	case settings.IndexStartupIntegrityProbe:
+	case "", settings.IndexStartupIntegrityProbe:
 		return settings.IndexStartupIntegrityProbe
 	case settings.IndexStartupIntegrityOff:
 		return settings.IndexStartupIntegrityOff
@@ -154,8 +158,7 @@ func (db *IndexDB) checkAccessibilityProbe() error {
 	var n int
 	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'index_items'`).Scan(&n)
 	if err != nil {
-		logger.Warningf("[DB_INTEGRITY] probe: cannot read sqlite_master: %v", err)
-		return db.deleteCorruptedDatabase()
+		return db.handleIntegrityReadError(err)
 	}
 	if n == 0 {
 		logger.Debugf("[DB_INTEGRITY] probe: index_items not present yet (new database), skipping row read")
@@ -168,8 +171,7 @@ func (db *IndexDB) checkAccessibilityProbe() error {
 		return nil
 	}
 	if err != nil {
-		logger.Warningf("[DB_INTEGRITY] probe: cannot read index_items: %v", err)
-		return db.deleteCorruptedDatabase()
+		return db.handleIntegrityReadError(err)
 	}
 	return nil
 }
@@ -186,9 +188,8 @@ func (db *IndexDB) checkIntegrityAndRecreateIfNeeded() error {
 	var result string
 	err := db.QueryRow("PRAGMA quick_check").Scan(&result)
 	if err != nil {
-		// If we can't even run the check, assume corruption
-		logger.Warningf("[DB_INTEGRITY] Cannot run integrity check: %v", err)
-		return db.deleteCorruptedDatabase()
+		// Distinguish actual corruption from transient failures.
+		return db.handleIntegrityReadError(err)
 	}
 
 	if result != "ok" {
@@ -196,6 +197,15 @@ func (db *IndexDB) checkIntegrityAndRecreateIfNeeded() error {
 		return db.deleteCorruptedDatabase()
 	}
 	return nil
+}
+
+// Busy/permission/I/O failures are not evidence that the index is corrupt.
+func (db *IndexDB) handleIntegrityReadError(err error) error {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "database disk image is malformed") || strings.Contains(message, "file is not a database") {
+		return db.deleteCorruptedDatabase()
+	}
+	return fmt.Errorf("index accessibility check failed (index preserved): %w", err)
 }
 
 // deleteCorruptedDatabase deletes the corrupted database file and associated files.
@@ -217,27 +227,13 @@ func (db *IndexDB) deleteCorruptedDatabase() error {
 	_ = os.Remove(dbPath + "-wal")
 	_ = os.Remove(dbPath + "-shm")
 
-	return fmt.Errorf("database was corrupted and deleted - will be recreated")
-}
-
-// startPeriodicCleanup starts a background goroutine that cleans up stale database entries every 24 hours.
-// Stale entries are items where last_updated is older than 24 hours.
-func (db *IndexDB) startPeriodicCleanup() {
-	cleanupInterval := 24 * time.Hour
-	ticker := time.NewTicker(cleanupInterval)
-	time.Sleep(cleanupInterval)
-	for range ticker.C {
-		logger.Infof("[DB_MAINTENANCE] Starting periodic cleanup of stale index entries (older than 24 hours)")
-		deletedCount, err := db.DeleteStaleItemsOlderThan(cleanupInterval)
-		if err != nil {
-			logger.Errorf("[DB_MAINTENANCE] Failed to cleanup stale entries: %v", err)
-		} else if deletedCount > 0 {
-			logger.Infof("[DB_MAINTENANCE] Cleaned up %d stale index entries", deletedCount)
-		}
-	}
+	return errIndexRecreated
 }
 
 func (db *IndexDB) CreateIndexTable() error {
+	if db.postgres {
+		return db.createPostgresIndexTable()
+	}
 	query := `
 	CREATE TABLE IF NOT EXISTS index_items (
 		source TEXT NOT NULL,
@@ -252,18 +248,29 @@ func (db *IndexDB) CreateIndexTable() error {
 		is_hidden BOOLEAN NOT NULL,
 		has_preview BOOLEAN NOT NULL,
 		last_updated INTEGER NOT NULL DEFAULT 0,
+		file_count INTEGER,
 		PRIMARY KEY (source, path)
 	);
 	
 	CREATE INDEX IF NOT EXISTS idx_source_parent_path ON index_items(source, parent_path);
 	CREATE INDEX IF NOT EXISTS idx_source_size ON index_items(source, size);
 	CREATE INDEX IF NOT EXISTS idx_last_updated ON index_items(source, last_updated);
+	CREATE INDEX IF NOT EXISTS idx_source_directories ON index_items(source, path) WHERE is_dir = TRUE;
 	`
 	_, err := db.Exec(query)
 	if err != nil {
 		return err
 	}
-	return db.ensureCreatedTimeColumn()
+	if err := db.ensureCreatedTimeColumn(); err != nil {
+		return err
+	}
+	if err := db.ensureFileCountColumn(); err != nil {
+		return err
+	}
+	if err := db.createIndexSourcesTable(); err != nil {
+		return err
+	}
+	return db.createDirectoryStateTable()
 }
 
 // ensureCreatedTimeColumn adds the created_time column to index_items when it is
@@ -308,10 +315,9 @@ func createdUnix(created *time.Time) int64 {
 	return created.Unix()
 }
 
-func (db *IndexDB) InsertItem(source, path string, info *iteminfo.FileInfo) error {
-	query := `
-	INSERT INTO index_items (source, path, parent_path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, last_updated)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+const indexItemUpsertSQL = `
+	INSERT INTO index_items (source, path, parent_path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, last_updated, file_count)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(source, path) DO UPDATE SET
 		parent_path = excluded.parent_path,
 		name = excluded.name,
@@ -322,7 +328,26 @@ func (db *IndexDB) InsertItem(source, path string, info *iteminfo.FileInfo) erro
 		is_dir = excluded.is_dir,
 		is_hidden = excluded.is_hidden,
 		has_preview = excluded.has_preview,
-		last_updated = excluded.last_updated
+		last_updated = excluded.last_updated,
+		file_count = COALESCE(excluded.file_count, index_items.file_count)
+	`
+
+func (db *IndexDB) InsertItem(source, path string, info *iteminfo.FileInfo) error {
+	query := `
+	INSERT INTO index_items (source, path, parent_path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, last_updated, file_count)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(source, path) DO UPDATE SET
+		parent_path = excluded.parent_path,
+		name = excluded.name,
+		size = excluded.size,
+		created_time = excluded.created_time,
+		mod_time = excluded.mod_time,
+		type = excluded.type,
+		is_dir = excluded.is_dir,
+		is_hidden = excluded.is_hidden,
+		has_preview = excluded.has_preview,
+		last_updated = excluded.last_updated,
+		file_count = COALESCE(excluded.file_count, index_items.file_count)
 	`
 	parentPath := getParentPath(path)
 	_, err := db.Exec(query,
@@ -337,7 +362,8 @@ func (db *IndexDB) InsertItem(source, path string, info *iteminfo.FileInfo) erro
 		info.Type == "directory",
 		info.Hidden,
 		info.HasPreview,
-		time.Now().Unix(),
+		time.Now().UnixNano(),
+		fileCountValue(info.FileCount),
 	)
 	if err != nil {
 		if !sqlitebusy.IsBusyOrLocked(err) {
@@ -356,6 +382,9 @@ const dbTransientRetryBackoff = 50 * time.Millisecond
 // BulkInsertItems inserts multiple items in a single transaction for a specific source.
 // Transient busy/locked errors retry before giving up (see dbTransientOpAttempts); persistent busy returns an error.
 func (db *IndexDB) BulkInsertItems(source string, items []*iteminfo.FileInfo) error {
+	if db.postgres {
+		return db.bulkInsertPostgres(source, items)
+	}
 	if len(items) == 0 {
 		return nil
 	}
@@ -412,21 +441,7 @@ func (db *IndexDB) attemptBulkInsert(source string, items []*iteminfo.FileInfo) 
 		db.mu.Unlock()
 	}()
 
-	stmt, err := tx.Prepare(`
-	INSERT INTO index_items (source, path, parent_path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, last_updated)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(source, path) DO UPDATE SET
-		parent_path = excluded.parent_path,
-		name = excluded.name,
-		size = excluded.size,
-		created_time = excluded.created_time,
-		mod_time = excluded.mod_time,
-		type = excluded.type,
-		is_dir = excluded.is_dir,
-		is_hidden = excluded.is_hidden,
-		has_preview = excluded.has_preview,
-		last_updated = excluded.last_updated
-	`)
+	stmt, err := tx.Prepare(indexItemUpsertSQL)
 	if err != nil {
 		if sqlitebusy.IsBusyOrLocked(err) {
 			logger.Debugf("[DB_TX] BulkInsertItems: Prepare busy/locked: %v", err)
@@ -436,7 +451,7 @@ func (db *IndexDB) attemptBulkInsert(source string, items []*iteminfo.FileInfo) 
 	}
 	defer stmt.Close()
 
-	nowUnix := time.Now().Unix()
+	nowUnix := time.Now().UnixNano()
 	for _, info := range items {
 		parentPath := getParentPath(info.Path)
 		_, err := stmt.Exec(
@@ -452,6 +467,7 @@ func (db *IndexDB) attemptBulkInsert(source string, items []*iteminfo.FileInfo) 
 			info.Hidden,
 			info.HasPreview,
 			nowUnix,
+			fileCountValue(info.FileCount),
 		)
 		if err != nil {
 			if sqlitebusy.IsBusyOrLocked(err) {
@@ -461,6 +477,10 @@ func (db *IndexDB) attemptBulkInsert(source string, items []*iteminfo.FileInfo) 
 			logger.Errorf("[DB] BulkInsertItems: Exec failed for path=%s, source=%s, error=%v", info.Path, source, err)
 			return false, false, err
 		}
+	}
+
+	if err := db.writeDirectoryStates(tx, source, items); err != nil {
+		return false, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -478,7 +498,7 @@ func (db *IndexDB) attemptBulkInsert(source string, items []*iteminfo.FileInfo) 
 // Busy/locked errors are returned so callers can fall back to the filesystem.
 func (db *IndexDB) GetItem(source, path string) (*iteminfo.FileInfo, error) {
 	query := `
-	SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+	SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 	FROM index_items WHERE source = ? AND path = ?
 	`
 	row := db.QueryRow(query, source, path)
@@ -506,7 +526,7 @@ func (db *IndexDB) GetItemsByPaths(source string, paths []string) (map[string]*i
 	}
 
 	query := fmt.Sprintf(`
-	SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+	SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 	FROM index_items WHERE source = ? AND path IN (%s)
 	`, strings.Join(placeholders, ","))
 
@@ -531,7 +551,7 @@ func (db *IndexDB) GetItemsByPaths(source string, paths []string) (map[string]*i
 // GetDirectoryChildren retrieves all children of a directory for a specific source.
 func (db *IndexDB) GetDirectoryChildren(source, dirPath string) ([]*iteminfo.FileInfo, error) {
 	query := `
-	SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+	SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 	FROM index_items WHERE source = ? AND parent_path = ?
 	ORDER BY is_dir DESC, name ASC
 	`
@@ -587,6 +607,9 @@ func (db *IndexDB) DeleteItem(source, path string, recursive bool) error {
 
 // helps prevent SQLite page cache memory leaks by shrinking memory
 func (db *IndexDB) ShrinkMemory() error {
+	if db.postgres {
+		return nil
+	}
 	_, err := db.Exec("PRAGMA shrink_memory")
 	return err
 }
@@ -594,6 +617,10 @@ func (db *IndexDB) ShrinkMemory() error {
 // Optimize runs PRAGMA optimize to update query planner statistics.
 // This helps SQLite choose more efficient query plans and should be called periodically.
 func (db *IndexDB) Optimize() error {
+	if db.postgres {
+		_, err := db.Exec("ANALYZE index_items")
+		return err
+	}
 	_, err := db.Exec("PRAGMA optimize")
 	return err
 }
@@ -601,6 +628,22 @@ func (db *IndexDB) Optimize() error {
 // ExplainQueryPlan analyzes a query and returns the execution plan as a string.
 // This is useful for debugging and optimizing queries to reduce page cache usage.
 func (db *IndexDB) ExplainQueryPlan(query string, args ...interface{}) (string, error) {
+	if db.postgres {
+		rows, err := db.Query("EXPLAIN "+query, args...)
+		if err != nil {
+			return "", err
+		}
+		defer rows.Close()
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				return "", err
+			}
+			plan.WriteString(line + "\n")
+		}
+		return plan.String(), rows.Err()
+	}
 	explainQuery := "EXPLAIN QUERY PLAN " + query
 	rows, err := db.Query(explainQuery, args...)
 	if err != nil {
@@ -622,13 +665,15 @@ func (db *IndexDB) ExplainQueryPlan(query string, args ...interface{}) (string, 
 
 // UpdateCacheSize updates the SQLite cache size at runtime.
 func (db *IndexDB) UpdateCacheSize(cacheSizeMB int) error {
+	if db.postgres {
+		return fmt.Errorf("cacheSizeMB is only supported with sqlite")
+	}
 	if cacheSizeMB < 1 {
 		return fmt.Errorf("cache size must be at least 1MB, got %dMB", cacheSizeMB)
 	}
 
-	// Calculate pages: MB * 1024 KB/MB / 4 KB/page = MB * 256 pages
-	// Use negative value to specify pages (SQLite convention)
-	cachePages := -(cacheSizeMB * 256)
+	// Negative cache_size values specify KiB.
+	cachePages := -(cacheSizeMB * 1024)
 
 	// PRAGMA doesn't support parameterized queries, must use string formatting
 	// Format directly in the query string - no placeholders allowed for PRAGMA
@@ -662,11 +707,11 @@ func (db *IndexDB) DeleteStaleFolders(source string, pathPrefix string, scanStar
 			// Root scanner: only check direct children folders
 			query = `
 			DELETE FROM index_items 
-			WHERE rowid IN (
-				SELECT rowid FROM index_items
+			WHERE (source, path) IN (
+				SELECT source, path FROM index_items
 				WHERE source = ? 
 				AND parent_path = '/'
-				AND is_dir = 1
+				AND is_dir = TRUE
 				AND last_updated < ?
 				LIMIT ?
 			)
@@ -677,11 +722,11 @@ func (db *IndexDB) DeleteStaleFolders(source string, pathPrefix string, scanStar
 			nextPrefix := getNextPathPrefix(pathPrefix)
 			query = `
 			DELETE FROM index_items 
-			WHERE rowid IN (
-				SELECT rowid FROM index_items
+			WHERE (source, path) IN (
+				SELECT source, path FROM index_items
 				WHERE source = ? 
 				AND path >= ? AND path < ?
-				AND is_dir = 1
+				AND is_dir = TRUE
 				AND last_updated < ?
 				LIMIT ?
 			)
@@ -742,10 +787,10 @@ func (db *IndexDB) DeleteStaleFilesInDirs(source string, updatedDirs []string, s
 		for {
 			query := fmt.Sprintf(`
 				DELETE FROM index_items 
-				WHERE rowid IN (
-					SELECT rowid FROM index_items
+				WHERE (source, path) IN (
+					SELECT source, path FROM index_items
 					WHERE source = ?
-					AND is_dir = 0
+					AND is_dir = FALSE
 					AND last_updated < ?
 					AND parent_path IN (%s)
 					LIMIT ?
@@ -794,8 +839,8 @@ func (db *IndexDB) DeleteStaleEntries(source string, pathPrefix string, scanStar
 			// This prevents root scanner from deleting items managed by child scanners
 			query = `
 			DELETE FROM index_items 
-			WHERE rowid IN (
-				SELECT rowid FROM index_items
+			WHERE (source, path) IN (
+				SELECT source, path FROM index_items
 				WHERE source = ? 
 				AND parent_path = '/'
 				AND last_updated < ?
@@ -809,8 +854,8 @@ func (db *IndexDB) DeleteStaleEntries(source string, pathPrefix string, scanStar
 			nextPrefix := getNextPathPrefix(pathPrefix)
 			query = `
 			DELETE FROM index_items 
-			WHERE rowid IN (
-				SELECT rowid FROM index_items
+			WHERE (source, path) IN (
+				SELECT source, path FROM index_items
 				WHERE source = ? 
 				AND path >= ? AND path < ?
 				AND last_updated < ?
@@ -843,7 +888,7 @@ func (db *IndexDB) DeleteStaleEntries(source string, pathPrefix string, scanStar
 // DeleteStaleItemsOlderThan deletes all items across all sources where last_updated is older than the specified duration.
 // This is used for periodic cleanup of stale database entries.
 func (db *IndexDB) DeleteStaleItemsOlderThan(olderThan time.Duration) (int, error) {
-	cutoffTime := time.Now().Add(-olderThan).Unix()
+	cutoffTime := time.Now().Add(-olderThan).UnixNano()
 	query := `
 	DELETE FROM index_items 
 	WHERE last_updated < ?
@@ -869,8 +914,8 @@ func (db *IndexDB) GetRecursiveCount(source string, pathPrefix string) (dirs uin
 	nextPrefix := getNextPathPrefix(pathPrefix)
 	query := `
 	SELECT 
-		SUM(CASE WHEN is_dir = 1 THEN 1 ELSE 0 END) as dir_count,
-		SUM(CASE WHEN is_dir = 0 THEN 1 ELSE 0 END) as file_count
+		SUM(CASE WHEN is_dir = TRUE THEN 1 ELSE 0 END) as dir_count,
+		SUM(CASE WHEN is_dir = FALSE THEN 1 ELSE 0 END) as file_count
 	FROM index_items 
 	WHERE source = ? AND path >= ? AND path < ?
 	`
@@ -896,7 +941,7 @@ func (db *IndexDB) GetDirectFileCount(source string, pathPrefix string) (files u
 	SELECT 
 		COUNT(*) as file_count
 	FROM index_items 
-	WHERE source = ? AND parent_path = ? AND is_dir = 0
+	WHERE source = ? AND parent_path = ? AND is_dir = FALSE
 	`
 
 	var fileCount sql.NullInt64
@@ -921,7 +966,7 @@ func (db *IndexDB) GetTypeGroupsForSize(source string, size int64, pathPrefix st
 		query = `
 		SELECT type, COUNT(*) as count
 		FROM index_items
-		WHERE source = ? AND size = ? AND is_dir = 0 AND path >= ? AND path < ?
+		WHERE source = ? AND size = ? AND is_dir = FALSE AND path >= ? AND path < ?
 		GROUP BY type
 		HAVING COUNT(*) >= 2
 		`
@@ -930,7 +975,7 @@ func (db *IndexDB) GetTypeGroupsForSize(source string, size int64, pathPrefix st
 		query = `
 		SELECT type, COUNT(*) as count
 		FROM index_items
-		WHERE source = ? AND size = ? AND is_dir = 0
+		WHERE source = ? AND size = ? AND is_dir = FALSE
 		GROUP BY type
 		HAVING COUNT(*) >= 2
 		`
@@ -977,17 +1022,17 @@ func (db *IndexDB) GetFilesForMultipleSizes(source string, sizes []int64, pathPr
 	if pathPrefix != "" {
 		nextPrefix := getNextPathPrefix(pathPrefix)
 		query = fmt.Sprintf(`
-		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 		FROM index_items 
-		WHERE source = ? AND size IN (%s) AND is_dir = 0 AND path >= ? AND path < ?
+		WHERE source = ? AND size IN (%s) AND is_dir = FALSE AND path >= ? AND path < ?
 		ORDER BY size, type, name
 		`, strings.Join(placeholders, ","))
 		args = append(args, pathPrefix, nextPrefix)
 	} else {
 		query = fmt.Sprintf(`
-		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 		FROM index_items 
-		WHERE source = ? AND size IN (%s) AND is_dir = 0
+		WHERE source = ? AND size IN (%s) AND is_dir = FALSE
 		ORDER BY size, type, name
 		`, strings.Join(placeholders, ","))
 	}
@@ -1019,7 +1064,7 @@ func (db *IndexDB) GetAllDirectories(source string) ([]string, error) {
 	query := `
 		SELECT path
 		FROM index_items
-		WHERE source = ? AND is_dir = 1
+		WHERE source = ? AND is_dir = TRUE
 		ORDER BY path
 	`
 
@@ -1045,6 +1090,15 @@ func (db *IndexDB) GetAllDirectories(source string) ([]string, error) {
 // This is a single SQL operation that filters unchanged rows in the WHERE clause
 // Minimizes transaction footprint by only touching rows that need updating
 func (db *IndexDB) UpdateFolderSizesIfChanged(source string, pathSizes map[string]uint64) (int64, error) {
+	return db.updateFolderColumn(source, "size", pathSizes)
+}
+
+func (db *IndexDB) UpdateFolderCountsIfChanged(source string, counts map[string]uint64) (int64, error) {
+	return db.updateFolderColumn(source, "file_count", counts)
+}
+
+// column is an internal constant, never user input.
+func (db *IndexDB) updateFolderColumn(source, column string, pathSizes map[string]uint64) (int64, error) {
 	if len(pathSizes) == 0 {
 		return 0, nil
 	}
@@ -1053,14 +1107,15 @@ func (db *IndexDB) UpdateFolderSizesIfChanged(source string, pathSizes map[strin
 	var setCaseParts []string
 	var whereCaseParts []string
 	var args []interface{}
+	var whereArgs []interface{}
 	var paths []string
 	var placeholders []string
 
 	for path, size := range pathSizes {
-		setCaseParts = append(setCaseParts, "WHEN path = ? THEN ?")
-		whereCaseParts = append(whereCaseParts, "WHEN path = ? THEN ?")
+		setCaseParts = append(setCaseParts, "WHEN path = ? THEN CAST(? AS BIGINT)")
+		whereCaseParts = append(whereCaseParts, "WHEN path = ? THEN CAST(? AS BIGINT)")
 		args = append(args, path, size)
-		args = append(args, path, size) // Duplicate for WHERE clause
+		whereArgs = append(whereArgs, path, size)
 		paths = append(paths, path)
 		placeholders = append(placeholders, "?")
 	}
@@ -1069,18 +1124,19 @@ func (db *IndexDB) UpdateFolderSizesIfChanged(source string, pathSizes map[strin
 	// The WHERE clause filters out unchanged rows, minimizing transaction size
 	query := fmt.Sprintf(`
 		UPDATE index_items 
-		SET size = CASE %s END
+		SET %s = CASE %s END
 		WHERE source = ? 
 		  AND path IN (%s) 
-		  AND is_dir = 1
-		  AND size != CASE %s END
-	`, strings.Join(setCaseParts, " "), strings.Join(placeholders, ","), strings.Join(whereCaseParts, " "))
+		  AND is_dir = TRUE
+		  AND (%s IS NULL OR %s != CASE %s END)
+	`, column, strings.Join(setCaseParts, " "), strings.Join(placeholders, ","), column, column, strings.Join(whereCaseParts, " "))
 
 	args = append(args, source)
 	for _, path := range paths {
 		args = append(args, path)
 	}
 
+	args = append(args, whereArgs...)
 	startTime := time.Now()
 	for attempt := 1; attempt <= dbTransientOpAttempts; attempt++ {
 		result, err := db.Exec(query, args...)
@@ -1112,29 +1168,30 @@ func (db *IndexDB) UpdateFolderSizesIfChanged(source string, pathSizes map[strin
 // LoadFolderSizes loads all folder sizes for a source from the database
 // Used on initialization to populate the in-memory map with existing sizes
 func (db *IndexDB) LoadFolderSizes(source string) (map[string]uint64, error) {
-	query := `
-		SELECT path, size 
-		FROM index_items 
-		WHERE source = ? AND is_dir = 1
-	`
+	sizes, _, err := db.LoadFolderStats(source)
+	return sizes, err
+}
 
-	rows, err := db.Query(query, source)
+func (db *IndexDB) LoadFolderStats(source string) (map[string]uint64, map[string]uint64, error) {
+	rows, err := db.Query("SELECT path, size, file_count FROM index_items WHERE source = ? AND is_dir = TRUE", source)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-
-	folderSizes := make(map[string]uint64)
+	sizes, counts := make(map[string]uint64), make(map[string]uint64)
 	for rows.Next() {
 		var path string
 		var size uint64
-		if err := rows.Scan(&path, &size); err != nil {
-			return nil, err
+		var count sql.NullInt64
+		if err := rows.Scan(&path, &size, &count); err != nil {
+			return nil, nil, err
 		}
-		folderSizes[path] = size
+		sizes[path] = size
+		if count.Valid {
+			counts[path] = uint64(count.Int64)
+		}
 	}
-
-	return folderSizes, rows.Err()
+	return sizes, counts, rows.Err()
 }
 
 // GetFilesBySizeAndType retrieves files matching both size and type.
@@ -1145,17 +1202,17 @@ func (db *IndexDB) GetFilesBySizeAndType(source string, size int64, fileType str
 	if pathPrefix != "" {
 		nextPrefix := getNextPathPrefix(pathPrefix)
 		query = `
-		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 		FROM index_items 
-		WHERE source = ? AND size = ? AND type = ? AND is_dir = 0 AND path >= ? AND path < ?
+		WHERE source = ? AND size = ? AND type = ? AND is_dir = FALSE AND path >= ? AND path < ?
 		ORDER BY name
 		`
 		args = []interface{}{source, size, fileType, pathPrefix, nextPrefix}
 	} else {
 		query = `
-		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 		FROM index_items 
-		WHERE source = ? AND size = ? AND type = ? AND is_dir = 0
+		WHERE source = ? AND size = ? AND type = ? AND is_dir = FALSE
 		ORDER BY name
 		`
 		args = []interface{}{source, size, fileType}
@@ -1187,17 +1244,17 @@ func (db *IndexDB) GetFilesBySize(source string, size int64, pathPrefix string) 
 	if pathPrefix != "" {
 		nextPrefix := getNextPathPrefix(pathPrefix)
 		query = `
-		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 		FROM index_items 
-		WHERE source = ? AND size = ? AND is_dir = 0 AND path >= ? AND path < ?
+		WHERE source = ? AND size = ? AND is_dir = FALSE AND path >= ? AND path < ?
 		ORDER BY name
 		`
 		args = []interface{}{source, size, pathPrefix, nextPrefix}
 	} else {
 		query = `
-		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview
+		SELECT path, name, size, created_time, mod_time, type, is_dir, is_hidden, has_preview, file_count
 		FROM index_items 
-		WHERE source = ? AND size = ? AND is_dir = 0
+		WHERE source = ? AND size = ? AND is_dir = FALSE
 		ORDER BY name
 		`
 		args = []interface{}{source, size}
@@ -1231,7 +1288,7 @@ func (db *IndexDB) GetSizeGroupsForDuplicates(source string, minSize int64, path
 		query = `
 		SELECT size, COUNT(*) as count
 		FROM index_items
-		WHERE source = ? AND size >= ? AND is_dir = 0 AND path >= ? AND path < ?
+		WHERE source = ? AND size >= ? AND is_dir = FALSE AND path >= ? AND path < ?
 		GROUP BY size
 		HAVING COUNT(*) >= 2
 		ORDER BY size DESC
@@ -1241,7 +1298,7 @@ func (db *IndexDB) GetSizeGroupsForDuplicates(source string, minSize int64, path
 		query = `
 		SELECT size, COUNT(*) as count
 		FROM index_items
-		WHERE source = ? AND size >= ? AND is_dir = 0
+		WHERE source = ? AND size >= ? AND is_dir = FALSE
 		GROUP BY size
 		HAVING COUNT(*) >= 2
 		ORDER BY size DESC
@@ -1313,6 +1370,7 @@ func scanItem(scanner interface{ Scan(...interface{}) error }) (*iteminfo.FileIn
 	var createdTime int64
 	var modTime int64
 	var isDir bool
+	var fileCount sql.NullInt64
 
 	err := scanner.Scan(
 		&info.Path,
@@ -1324,6 +1382,7 @@ func scanItem(scanner interface{ Scan(...interface{}) error }) (*iteminfo.FileIn
 		&isDir,
 		&info.Hidden,
 		&info.HasPreview,
+		&fileCount,
 	)
 	if err != nil {
 		return nil, err
@@ -1334,6 +1393,10 @@ func scanItem(scanner interface{ Scan(...interface{}) error }) (*iteminfo.FileIn
 	}
 	info.ModTime = time.Unix(modTime, 0)
 	info.IsDir = isDir
+	if isDir && fileCount.Valid {
+		count := uint64(fileCount.Int64)
+		info.FileCount = &count
+	}
 	return &info, nil
 }
 

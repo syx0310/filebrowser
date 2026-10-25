@@ -1101,6 +1101,7 @@ func identifySecretFieldsByReflection(v reflect.Value, typeName string, secrets 
 
 	// Known secret field names
 	secretFields := map[string]bool{
+		"DSN":           true,
 		"Key":           true,
 		"AdminUsername": true,
 		"AdminPassword": true,

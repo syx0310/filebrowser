@@ -1,0 +1,51 @@
+services:
+  filebrowser-postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: filebrowser_index
+      POSTGRES_USER: filebrowser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - ${FILEBROWSER_PG_DATA:-./data/postgres}:/var/lib/postgresql
+
+  filebrowser:
+    cap_add:
+      - DAC_READ_SEARCH
+    environment:
+      FILEBROWSER_ADMIN_PASSWORD: ${FILEBROWSER_ADMIN_PASSWORD:?Set FILEBROWSER_ADMIN_PASSWORD}
+      FILEBROWSER_CONFIG: /config/config.yaml
+      FILEBROWSER_INDEX_DRIVER: postgres
+      FILEBROWSER_INDEX_DSN: postgres://filebrowser:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@filebrowser-postgres:5432/filebrowser_index?sslmode=disable
+      FILEBROWSER_INDEX_MODE: size
+      FILEBROWSER_INDEX_INCLUDE_HIDDEN: 'true'
+      FILEBROWSER_SHOW_HIDDEN: 'true'
+      # Optional: fixed delay after each scan, and full-scan cadence.
+      # FILEBROWSER_INDEX_SCAN_INTERVAL: '4h'
+      # FILEBROWSER_INDEX_FULL_SCAN_EVERY: '6'
+    depends_on:
+      filebrowser-postgres:
+        condition: service_started
+    healthcheck:
+      interval: 30s
+      retries: 5
+      start_period: 30s
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:80/health >/dev/null || exit 1
+      timeout: 10s
+    image: ${FILEBROWSER_IMAGE:?Set FILEBROWSER_IMAGE to an image with PostgreSQL index support}
+    ports:
+      - '${FILEBROWSER_HTTP_PORT:-8080}:80'
+    restart: unless-stopped
+    user: '0:0'
+    volumes:
+      - ${FILEBROWSER_CONFIG_DIR:-./data/config}:/config
+      - ${FILEBROWSER_FILES:?Set FILEBROWSER_FILES to the directory to browse}:/mnt:ro
+      - ${FILEBROWSER_CACHE_DIR:-./data/cache}:/.cache

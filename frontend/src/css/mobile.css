@@ -2,6 +2,7 @@
   /* Narrower list/compact columns (see listing.css) so the name keeps its space */
   :root {
     --listing-col-gap: 0.5rem;
+    --listing-col-count: 3.5rem;
     --listing-col-size: 5rem;
     --listing-col-modified: 8rem;
   }
@@ -33,6 +34,15 @@
   }
   #listingView .header .name {
     width: 50%;
+  }
+
+  .list .listing-item .text .count {
+    width: 100%;
+    padding-left: 0;
+    padding-right: 1em;
+  }
+  .list .listing-item .text .count::before {
+    content: attr(data-label) ": ";
   }
 
   /* Other mobile styles */

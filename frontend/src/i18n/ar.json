@@ -43,6 +43,8 @@
     "requestTimedOut": "انتهت مهلة الطلب. يرجى التحقق من إعدادات الشبكة أو إعدادات الوكيل العكسي."
   },
   "files": {
+    "count": "العدد",
+    "recursiveFileCount": "عدد الملفات، بما في ذلك المجلدات الفرعية",
     "sortByCreationTime": "الترتيب حسب وقت الإنشاء",
     "creationTime": "وقت الإنشاء",
     "emptyFile": "ملف فارغ",
@@ -50,6 +52,7 @@
     "multipleSelectionEnabled": "التحديد المتعدد مفعل",
     "sortByLastModified": "الترتيب بآخر تعديل",
     "sortByName": "الترتيب بالإسم",
+    "sortByCount": "Sort by file count",
     "sortBySize": "الترتيب بالحجم",
     "sortByType": "الترتيب بالنوع",
     "noPreview": "المعاينة غير متوفرة لهذا الملف.",

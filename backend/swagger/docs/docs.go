@@ -5428,6 +5428,10 @@ const docTemplate = `{
                     "description": "filesystem birth time, nil when unavailable",
                     "type": "string"
                 },
+                "fileCount": {
+                    "description": "recursive file count for directories; nil until indexed",
+                    "type": "integer"
+                },
                 "files": {
                     "description": "files in the directory with optional metadata",
                     "type": "array",
@@ -5525,6 +5529,10 @@ const docTemplate = `{
                     "description": "filesystem birth time, nil when unavailable",
                     "type": "string"
                 },
+                "fileCount": {
+                    "description": "recursive file count for directories; nil until indexed",
+                    "type": "integer"
+                },
                 "hasPreview": {
                     "description": "whether the file has a thumbnail preview",
                     "type": "boolean"
@@ -5573,6 +5581,10 @@ const docTemplate = `{
                 "created": {
                     "description": "filesystem birth time, nil when unavailable",
                     "type": "string"
+                },
+                "fileCount": {
+                    "description": "recursive file count for directories; nil until indexed",
+                    "type": "integer"
                 },
                 "files": {
                     "description": "files in the directory with optional metadata",
@@ -5628,6 +5640,10 @@ const docTemplate = `{
                 "created": {
                     "description": "filesystem birth time, nil when unavailable",
                     "type": "string"
+                },
+                "fileCount": {
+                    "description": "recursive file count for directories; nil until indexed",
+                    "type": "integer"
                 },
                 "hasPreview": {
                     "description": "whether the file has a thumbnail preview",
@@ -6042,8 +6058,32 @@ const docTemplate = `{
                     "description": "enable to always create a new indexing database on startup.",
                     "type": "boolean"
                 },
+                "driver": {
+                    "description": "index storage backend (default: sqlite); the application database remains SQLite",
+                    "type": "string",
+                    "enum": [
+                        "sqlite",
+                        "postgres"
+                    ]
+                },
+                "dsn": {
+                    "description": "secret: PostgreSQL connection string; prefer FILEBROWSER_INDEX_DSN",
+                    "type": "string"
+                },
+                "includeHidden": {
+                    "description": "include hidden files and directories in indexing and size totals, independently of UI visibility",
+                    "type": "boolean"
+                },
+                "mode": {
+                    "description": "full: includes type/preview detection; size: file/directory sizes, timestamps and paths only",
+                    "type": "string",
+                    "enum": [
+                        "full",
+                        "size"
+                    ]
+                },
                 "startupIntegrityCheck": {
-                    "description": "the method used to check the integrity of the index database on startup (default: quickCheck)",
+                    "description": "the method used to check the accessibility of the index database on startup (default: probe; quickCheck performs a full check)",
                     "type": "string",
                     "enum": [
                         "quickCheck",
@@ -6054,6 +6094,20 @@ const docTemplate = `{
                 "walMode": {
                     "description": "enable the more complex WAL journaling mode. Slower, more memory usage, but better for deployments with constant user activity.",
                     "type": "boolean"
+                }
+            }
+        },
+        "settings.IndexingConfig": {
+            "type": "object",
+            "properties": {
+                "fullScanEvery": {
+                    "description": "one full scan every N runs (default 5); 1 means always full; 0 inherits the global setting",
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "scanInterval": {
+                    "description": "auto (default) uses adaptive scheduling; a duration such as 30m, 6h or 24h waits after each scan; minimum 1m; empty inherits the global setting",
+                    "type": "string"
                 }
             }
         },
@@ -6547,6 +6601,14 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "indexing": {
+                    "description": "default scan scheduling; sources may override individual settings",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/settings.IndexingConfig"
+                        }
+                    ]
+                },
                 "logging": {
                     "type": "array",
                     "items": {
@@ -6773,6 +6835,14 @@ const docTemplate = `{
                 "disabled": {
                     "description": "disable the source, this is useful so you don't need to remove it from the config file",
                     "type": "boolean"
+                },
+                "indexing": {
+                    "description": "per-source scan scheduling overrides server.indexing and global environment defaults",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/settings.IndexingConfig"
+                        }
+                    ]
                 },
                 "private": {
                     "description": "designate as source as private -- currently just means no sharing permitted.",
@@ -8895,4 +8965,3 @@ var SwaggerInfo = &swag.Spec{
 	LeftDelim:        "{{",
 	RightDelim:       "}}",
 }
-

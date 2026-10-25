@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 	dbsql "github.com/gtsteffaniak/filebrowser/backend/internal/database/sql"
 	"github.com/gtsteffaniak/filebrowser/backend/pkg/indexing/iteminfo"
+	"github.com/gtsteffaniak/filebrowser/backend/pkg/settings"
 )
 
-// TestCheckFolderModtime_unchangedPreservesHasPreviewAndHidden verifies quick-scan touch updates
-// do not clobber has_preview/hidden when folder modtime is unchanged.
+// TestCheckFolderModtime_unchangedPreservesHasPreviewAndHidden verifies unchanged
+// checkpoints leave existing metadata untouched without a SQL heartbeat.
 func TestCheckFolderModtime_unchangedPreservesHasPreviewAndHidden(t *testing.T) {
 	if indexDB == nil {
 		var err error
@@ -56,6 +56,11 @@ func TestCheckFolderModtime_unchangedPreservesHasPreviewAndHidden(t *testing.T) 
 		t.Fatalf("InsertItem: %v", err)
 	}
 	idx.SetFolderSize(folderPath, 42)
+	stat, err := os.Stat(photosDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.directoryStates = map[string]iteminfo.DirectoryScanState{folderPath: {ModTimeNS: stat.ModTime().UnixNano(), Valid: true}}
 
 	s := &Scanner{
 		scanPath: "/",
