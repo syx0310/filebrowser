@@ -150,6 +150,7 @@ func configureHTTPRouter(router, api, publicRoutes, publicApi *http.ServeMux) {
 	// Tools Routes - /api/tools/
 	// ========================================
 	api.HandleFunc("GET /tools/search", withUser(withSearchToolAccess(searchHandler)))
+	api.HandleFunc("GET /tools/size-tree", withUser(withToolAccess(users.ToolSizeViewer)(sizeTreeHandler)))
 	api.HandleFunc("GET /tools/duplicate-finder", withUser(withToolAccess(users.ToolDuplicateFinder)(duplicatesHandler)))
 	api.HandleFunc("GET /tools/file-watcher", withUser(withToolAccess(users.ToolFileWatcher)(fileWatchHandler)))
 	api.HandleFunc("GET /tools/file-watcher/sse", withUser(withToolAccess(users.ToolFileWatcher)(fileWatchSSEHandler)))

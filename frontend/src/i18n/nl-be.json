@@ -1213,5 +1213,27 @@
     "errors": {
       "exceeded": "Opslaglimiet overschreden"
     }
+  },
+  "sizeMap": {
+    "view": "Analysis view",
+    "title": "Directory map",
+    "largestFiles": "Largest files",
+    "up": "Parent folder",
+    "refresh": "Refresh",
+    "indexedSize": "Indexed size",
+    "hint": "Click to inspect · Double-click a folder to zoom in",
+    "scanning": "Indexing is in progress. Sizes reflect the latest saved directory statistics.",
+    "grouped": "Other indexed contents groups undisplayed entries and unexpanded space. Open a folder to see more detail; totals follow the index and may include hidden or filtered contents.",
+    "other": "Other indexed contents",
+    "selection": "Selection",
+    "selectHint": "Select a rectangle",
+    "ofFolder": "of this folder",
+    "enter": "Explore folder",
+    "openListing": "Open in file browser",
+    "colorHint": "Colors distinguish directory branches. No file content or type probing is required.",
+    "loading": "Loading directory sizes…",
+    "notIndexed": "This directory has not been indexed yet. Try again after scanning.",
+    "unavailable": "The index is still loading or the query timed out. Please retry.",
+    "noArea": "No files with a known nonzero size. Empty folders may still appear in the list below."
   }
 }

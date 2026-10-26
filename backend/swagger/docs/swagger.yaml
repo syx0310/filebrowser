@@ -10,6 +10,16 @@ definitions:
           type: string
         type: array
     type: object
+  indexing.IndexStatus:
+    enum:
+    - ready
+    - indexing
+    - unavailable
+    type: string
+    x-enum-varnames:
+    - READY
+    - INDEXING
+    - UNAVAILABLE
   indexing.SearchResult:
     properties:
       created:
@@ -1697,6 +1707,31 @@ definitions:
         description: default view mode for anonymous users
         type: string
     type: object
+  sql.SizeTreeNode:
+    properties:
+      children:
+        items:
+          $ref: '#/definitions/sql.SizeTreeNode'
+        type: array
+      created:
+        type: string
+      expanded:
+        type: boolean
+      fileCount:
+        type: integer
+      hasMore:
+        type: boolean
+      isDir:
+        type: boolean
+      modified:
+        type: string
+      name:
+        type: string
+      path:
+        type: string
+      size:
+        type: integer
+    type: object
   users.AuthToken:
     properties:
       Permissions:
@@ -2564,6 +2599,19 @@ definitions:
     required:
     - name
     - path
+    type: object
+  web.sizeTreeResponse:
+    properties:
+      lastIndexedUnixTime:
+        type: integer
+      nodeLimit:
+        type: integer
+      root:
+        $ref: '#/definitions/sql.SizeTreeNode'
+      source:
+        type: string
+      status:
+        $ref: '#/definitions/indexing.IndexStatus'
     type: object
   web.unarchiveRequest:
     properties:
@@ -5204,6 +5252,50 @@ paths:
               type: string
             type: object
       summary: Search Files
+      tags:
+      - Tools
+  /api/tools/size-tree:
+    get:
+      parameters:
+      - description: Source name
+        in: query
+        name: source
+        required: true
+        type: string
+      - description: Directory relative to the user's source scope
+        in: query
+        name: path
+        type: string
+      - description: One or two levels; default two
+        in: query
+        name: depth
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/web.sizeTreeResponse'
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Read an indexed directory size map
       tags:
       - Tools
   /api/users:

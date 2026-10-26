@@ -3772,6 +3772,73 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/tools/size-tree": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tools"
+                ],
+                "summary": "Read an indexed directory size map",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Source name",
+                        "name": "source",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Directory relative to the user's source scope",
+                        "name": "path",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "One or two levels; default two",
+                        "name": "depth",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/web.sizeTreeResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/users": {
             "get": {
                 "description": "Returns all users (admins) or only the current user; with ?username=self, the logged-in user; with ?username=login, that user if permitted. Query id= is not supported.",
@@ -5383,6 +5450,19 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "indexing.IndexStatus": {
+            "type": "string",
+            "enum": [
+                "ready",
+                "indexing",
+                "unavailable"
+            ],
+            "x-enum-varnames": [
+                "READY",
+                "INDEXING",
+                "UNAVAILABLE"
+            ]
         },
         "indexing.SearchResult": {
             "type": "object",
@@ -7685,6 +7765,44 @@ const docTemplate = `{
                 }
             }
         },
+        "sql.SizeTreeNode": {
+            "type": "object",
+            "properties": {
+                "children": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/sql.SizeTreeNode"
+                    }
+                },
+                "created": {
+                    "type": "string"
+                },
+                "expanded": {
+                    "type": "boolean"
+                },
+                "fileCount": {
+                    "type": "integer"
+                },
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "isDir": {
+                    "type": "boolean"
+                },
+                "modified": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "size": {
+                    "type": "integer"
+                }
+            }
+        },
         "users.AuthToken": {
             "type": "object",
             "properties": {
@@ -8902,6 +9020,26 @@ const docTemplate = `{
                 },
                 "path": {
                     "type": "string"
+                }
+            }
+        },
+        "web.sizeTreeResponse": {
+            "type": "object",
+            "properties": {
+                "lastIndexedUnixTime": {
+                    "type": "integer"
+                },
+                "nodeLimit": {
+                    "type": "integer"
+                },
+                "root": {
+                    "$ref": "#/definitions/sql.SizeTreeNode"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/indexing.IndexStatus"
                 }
             }
         },

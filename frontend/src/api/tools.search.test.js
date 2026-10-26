@@ -6,8 +6,8 @@ vi.mock("@/utils/url.js", () => ({
 }));
 vi.mock("./utils", () => ({ fetchURL: vi.fn(), fetchJSON: vi.fn() }));
 
-import { fetchURL } from "./utils.ts";
-import { search } from "./tools.js";
+import { fetchURL, fetchJSON } from "./utils.ts";
+import { search, sizeTree } from "./tools.js";
 
 describe("search result limit", () => {
   beforeEach(() => {
@@ -35,5 +35,12 @@ describe("search result limit", () => {
     await search("/", "one", "", true);
     expect(JSON.parse(fetchURL.mock.calls[0][0])).toMatchObject({ largest: "true" });
     expect(JSON.parse(fetchURL.mock.calls[0][0])).not.toHaveProperty("limit");
+  });
+
+  it("requests two levels of indexed directory sizes with cancellation", async () => {
+    const controller = new AbortController();
+    await sizeTree('one', '/photos/', controller.signal);
+    expect(JSON.parse(fetchJSON.mock.calls[0][0])).toEqual({ source: 'one', path: '/photos/', depth: '2' });
+    expect(fetchJSON.mock.calls[0][1].signal).toBe(controller.signal);
   });
 });

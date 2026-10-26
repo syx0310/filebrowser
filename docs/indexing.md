@@ -2,6 +2,7 @@
 
 For a configurable Docker Compose example, see [部署说明（中文）](deployment-pg.zh-CN.md).
 For incremental quick scans and asynchronous startup, see [扫描与启动优化（中文）](scanning-performance.zh-CN.md).
+For the two-level interactive directory treemap, see [目录空间图（中文）](directory-size-map.zh-CN.md).
 
 The file index supports SQLite (default) and PostgreSQL. This affects the file
 index only. Users, permissions, shares and other application data keep using

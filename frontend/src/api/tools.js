@@ -2,6 +2,10 @@ import { notify } from "@/notify/index.ts";
 import { getApiPath } from "@/utils/url.js";
 import { fetchURL, fetchJSON } from "./utils.ts";
 
+export async function sizeTree(source, path = "/", signal) {
+  return fetchJSON(getApiPath("tools/size-tree", { source, path, depth: "2" }), { signal });
+}
+
 // GET /api/tools/search
 // extraParams: optional { limit, olderThan, newerThan, useWildcard, terms, termJoin, perSourceScopes }
 // perSourceScopes: non-empty array of { source, path } sends repeated scope=source:path.
