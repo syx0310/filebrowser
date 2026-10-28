@@ -40,7 +40,12 @@ describe("search result limit", () => {
   it("requests two levels of indexed directory sizes with cancellation", async () => {
     const controller = new AbortController();
     await sizeTree('one', '/photos/', controller.signal);
-    expect(JSON.parse(fetchJSON.mock.calls[0][0])).toEqual({ source: 'one', path: '/photos/', depth: '2' });
+    expect(JSON.parse(fetchJSON.mock.calls[0][0])).toEqual({ source: 'one', path: '/photos/', depth: '2', limit: '80' });
     expect(fetchJSON.mock.calls[0][1].signal).toBe(controller.signal);
+  });
+
+  it("passes the selected directory-map item limit to the index query", async () => {
+    await sizeTree('one', '/photos/', undefined, 500);
+    expect(JSON.parse(fetchJSON.mock.calls[0][0])).toMatchObject({ limit: '500' });
   });
 });

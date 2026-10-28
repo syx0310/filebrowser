@@ -24,6 +24,7 @@ type sizeTreeResponse struct {
 	Status          indexing.IndexStatus `json:"status"`
 	LastIndexedUnix int64                `json:"lastIndexedUnixTime"`
 	NodeLimit       int                  `json:"nodeLimit"`
+	ChildrenLimit   int                  `json:"childrenLimit"`
 }
 
 // sizeTreeHandler returns indexed children only; it never resolves paths on disk.
@@ -33,7 +34,9 @@ type sizeTreeResponse struct {
 // @Param source query string true "Source name"
 // @Param path query string false "Directory relative to the user's source scope"
 // @Param depth query int false "One or two levels; default two"
+// @Param limit query int false "Maximum direct children per folder, largest first" default(80) minimum(1) maximum(1000)
 // @Success 200 {object} sizeTreeResponse
+// @Failure 400 {object} map[string]string
 // @Failure 403 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 503 {object} map[string]string
@@ -75,6 +78,13 @@ func sizeTreeHandler(w http.ResponseWriter, r *http.Request, d *Context) (int, e
 			return http.StatusBadRequest, fmt.Errorf("depth must be 1 or 2")
 		}
 	}
+	childrenLimit := dbsql.SizeTreeDefaultChildrenLimit
+	if r.URL.Query().Has("limit") {
+		childrenLimit, err = strconv.Atoi(r.URL.Query().Get("limit"))
+		if err != nil || childrenLimit < 1 || childrenLimit > dbsql.SizeTreeMaxChildrenLimit {
+			return http.StatusBadRequest, fmt.Errorf("limit must be an integer between 1 and %d", dbsql.SizeTreeMaxChildrenLimit)
+		}
+	}
 	allowed := func(item *iteminfo.FileInfo) bool {
 		if !strings.HasPrefix(item.Path, scope) {
 			return false
@@ -89,7 +99,7 @@ func sizeTreeHandler(w http.ResponseWriter, r *http.Request, d *Context) (int, e
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	root, err := idx.ReadSizeTree(ctx, indexPath, depth, allowed)
+	root, err := idx.ReadSizeTree(ctx, indexPath, depth, childrenLimit, allowed)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return http.StatusNotFound, fmt.Errorf("directory has not been indexed yet")
@@ -115,5 +125,5 @@ func sizeTreeHandler(w http.ResponseWriter, r *http.Request, d *Context) (int, e
 	if !last.IsZero() {
 		lastUnix = last.Unix()
 	}
-	return RenderJSON(w, r, sizeTreeResponse{Source: name, Root: root, Status: idx.GetStatus(), LastIndexedUnix: lastUnix, NodeLimit: dbsql.SizeTreeNodeLimit})
+	return RenderJSON(w, r, sizeTreeResponse{Source: name, Root: root, Status: idx.GetStatus(), LastIndexedUnix: lastUnix, NodeLimit: dbsql.SizeTreeNodeBudget(childrenLimit), ChildrenLimit: childrenLimit})
 }

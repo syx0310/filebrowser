@@ -5,6 +5,14 @@
       <button type="button" class="button button--flat" :disabled="currentPath === '/' || loading" @click="goUp">{{ symbols.up }} {{ $t('sizeMap.up') }}</button>
       <button type="button" class="button" :disabled="!chosenSource || loading" @click="loadTree">{{ $t('sizeMap.refresh') }}</button>
     </div>
+    <form class="map-display-options" @submit.prevent="applyLimit">
+      <label for="size-map-item-limit">{{ $t('sizeMap.itemLimit') }}</label>
+      <input id="size-map-item-limit" v-model="limitInput" type="number" min="1" :max="maxItemLimit" step="1" required
+        :aria-invalid="!!limitError" aria-describedby="size-map-limit-hint" />
+      <button type="submit" class="button button--flat" :disabled="!chosenSource">{{ $t('sizeMap.applyLimit') }}</button>
+      <span id="size-map-limit-hint">{{ $t('sizeMap.limitHint', { max: maxItemLimit }) }}</span>
+      <span v-if="limitError" class="limit-error" role="alert">{{ limitError }}</span>
+    </form>
     <nav class="map-breadcrumbs" :aria-label="$t('general.path')">
       <template v-for="crumb in breadcrumbs" :key="crumb.path">
         <span v-if="crumb.path !== '/'" aria-hidden="true">{{ symbols.separator }}</span>
@@ -59,9 +67,9 @@
       </div>
       <div class="map-list card">
         <table>
-          <thead><tr><th>{{ $t('general.name') }}</th><th>{{ $t('files.count') }}</th><th>{{ $t('general.size') }}</th></tr></thead>
+          <thead><tr><th>{{ $t('general.name') }}</th><th>{{ $t('files.count') }}</th><th aria-sort="descending">{{ $t('general.size') }} {{ symbols.down }}</th></tr></thead>
           <tbody>
-            <tr v-for="node in tree.root.children || []" :key="node.path" :class="{ active: selected?.path === node.path }" @click="select(node)" @dblclick="enter(node)">
+            <tr v-for="node in sortedChildren" :key="node.path" :class="{ active: selected?.path === node.path }" @click="select(node)" @dblclick="enter(node)">
               <td><button type="button" @click.stop="select(node)" @dblclick.stop="enter(node)" @keydown.enter.prevent="enter(node)">{{ node.isDir ? symbols.folder : '' }}{{ node.name }}</button></td>
               <td>{{ node.isDir ? formatCount(node.fileCount) : symbols.dash }}</td><td>{{ humanSize(node.size) }}</td>
             </tr>
@@ -77,17 +85,32 @@ import { toolsApi } from "@/api";
 import { state } from "@/store";
 import { getHumanReadableFilesize } from "@/utils/filesizes";
 import { formatTimestamp, fromNow } from "@/utils/moment";
-import { buildSizeMap, treeHasRemainder } from "@/utils/sizeTreemap";
+import { buildSizeMap, treeHasRemainder, sortSizeNodes, parseSizeMapLimit, DEFAULT_SIZE_MAP_LIMIT, MAX_SIZE_MAP_LIMIT } from "@/utils/sizeTreemap";
 import { globalVars } from "@/utils/constants";
 import PathPickerButton from "@/components/files/PathPickerButton.vue";
+
+const LIMIT_STORAGE_KEY = 'directoryMapItemLimit';
+
+function savedItemLimit() {
+  try { return parseSizeMapLimit(localStorage.getItem(LIMIT_STORAGE_KEY)) ?? DEFAULT_SIZE_MAP_LIMIT; }
+  catch { return DEFAULT_SIZE_MAP_LIMIT; }
+}
 
 export default {
   name: "DirectorySizeMap",
   components: { PathPickerButton },
-  data() { return { symbols: { up: '↑', separator: '/', middle: ' · ', folder: '▸ ', dash: '—', external: '↗' }, chosenSource: "", chosenPath: "/", tree: null, selected: null, loading: false, error: "", controller: null, requestId: 0, mapWidth: 1100, mapHeight: 660, resizeObserver: null, initializing: true }; },
+  data() {
+    return {
+      symbols: { up: '↑', down: '↓', separator: '/', middle: ' · ', folder: '▸ ', dash: '—', external: '↗' },
+      chosenSource: "", chosenPath: "/", tree: null, selected: null, loading: false, error: "",
+      controller: null, requestId: 0, mapWidth: 1100, mapHeight: 660, resizeObserver: null, initializing: true,
+      itemLimit: DEFAULT_SIZE_MAP_LIMIT, limitInput: DEFAULT_SIZE_MAP_LIMIT, maxItemLimit: MAX_SIZE_MAP_LIMIT, limitError: '',
+    };
+  },
   computed: {
     currentPath() { return this.tree?.root.path || this.chosenPath || "/"; },
     rectangles() { return this.tree ? buildSizeMap(this.tree.root, this.mapWidth, this.mapHeight) : []; },
+    sortedChildren() { return sortSizeNodes(this.tree?.root.children || []); },
     hasRemainder() { return this.tree && treeHasRemainder(this.tree.root); },
     lastScan() { return this.tree?.lastIndexedUnixTime > 0 ? fromNow(this.tree.lastIndexedUnixTime, state.user?.locale, { unit: "seconds" }) : this.$t("index.unknown"); },
     breadcrumbs() {
@@ -121,7 +144,16 @@ export default {
       parts.pop();
       this.navigate(`/${parts.length ? `${parts.join('/')}/` : ''}`);
     },
-    navigate(path) { void this.$router.push({ path: this.$route.path, query: { source: this.chosenSource, path } }); },
+    navigate(path, limit = this.itemLimit) { void this.$router.push({ path: this.$route.path, query: { source: this.chosenSource, path, limit: String(limit) } }); },
+    applyLimit() {
+      const limit = parseSizeMapLimit(this.limitInput);
+      if (limit === undefined) {
+        this.limitError = this.$t('sizeMap.invalidLimit', { max: this.maxItemLimit });
+        return;
+      }
+      this.limitError = '';
+      this.navigate(this.chosenPath || '/', limit);
+    },
     async pickPath() {
       await this.$nextTick();
       if (this.chosenSource === this.$route.query.source && this.chosenPath === (this.$route.query.path || '/')) return;
@@ -131,6 +163,11 @@ export default {
       this.initializing = true;
       this.chosenSource = String(this.$route.query.source || state.sources.current || Object.keys(state.sources.info || {})[0] || '');
       this.chosenPath = String(this.$route.query.path || '/');
+      this.itemLimit = parseSizeMapLimit(this.$route.query.limit) ?? savedItemLimit();
+      this.limitInput = this.itemLimit;
+      this.limitError = '';
+      try { localStorage.setItem(LIMIT_STORAGE_KEY, String(this.itemLimit)); }
+      catch { /* Navigation and loading still work if browser storage is unavailable. */ }
       await this.$nextTick();
       this.initializing = false;
       void this.loadTree();
@@ -143,7 +180,7 @@ export default {
       this.loading = true;
       this.error = '';
       try {
-        const result = await toolsApi.sizeTree(this.chosenSource, this.chosenPath, this.controller.signal);
+        const result = await toolsApi.sizeTree(this.chosenSource, this.chosenPath, this.controller.signal, this.itemLimit);
         if (requestId !== this.requestId) return;
         this.tree = result;
         this.selected = null;
@@ -185,6 +222,29 @@ export default {
 
 .map-toolbar :deep(.unified-path-picker) {
   flex: 1;
+}
+
+.map-display-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem .75rem;
+  margin: .8rem 0;
+  font-size: .85rem;
+}
+
+.map-display-options input {
+  width: 6rem;
+  padding: .5rem;
+  margin: 0;
+}
+
+.map-display-options span {
+  color: var(--textSecondary);
+}
+
+.map-display-options .limit-error {
+  color: var(--red);
 }
 
 .map-breadcrumbs {

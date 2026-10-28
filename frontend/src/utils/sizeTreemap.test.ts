@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { buildSizeMap, childrenForMap, treeHasRemainder, type SizeNode } from "./sizeTreemap.ts";
+import { buildSizeMap, childrenForMap, treeHasRemainder, sortSizeNodes, parseSizeMapLimit, type SizeNode } from "./sizeTreemap.ts";
 
 const file = (name: string, size: number): SizeNode => ({ name, path: `/${name}`, size, isDir: false });
 
 describe("directory size map", () => {
+  it("sorts largest first with deterministic ties without mutating the API response", () => {
+    const nodes = [file('zero', 0), file('b', 50), file('large', 100), file('a', 50)];
+    expect(sortSizeNodes(nodes).map(n => n.name)).toEqual(['large', 'a', 'b', 'zero']);
+    expect(nodes.map(n => n.name)).toEqual(['zero', 'b', 'large', 'a']);
+    const root = { name: 'root', path: '/', size: 200, isDir: true, expanded: true, children: nodes };
+    expect(buildSizeMap(root).map(r => r.node.name)).toEqual(['large', 'a', 'b']);
+  });
+
+  it("accepts only bounded integer display limits from saved settings and links", () => {
+    for (const value of [1, '80', '1000']) expect(parseSizeMapLimit(value)).toBe(Number(value));
+    for (const value of ['', null, undefined, [], 'abc', 0, -1, 1.5, 1001, Infinity]) expect(parseSizeMapLimit(value)).toBeUndefined();
+  });
+
   it("uses each directory total once, with nested entries contained in their parent", () => {
     const root: SizeNode = { name: "root", path: "/", size: 100, isDir: true, expanded: true, children: [
       { name: "dir", path: "/dir/", size: 75, isDir: true, expanded: true, children: [file("one", 50), file("two", 25)] }, file("three", 25),

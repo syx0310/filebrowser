@@ -9,9 +9,19 @@ import (
 	"github.com/gtsteffaniak/filebrowser/backend/pkg/indexing/iteminfo"
 )
 
-const SizeTreeNodeLimit = 600
-const sizeTreeDirectoryLimit = 24
-const sizeTreeChildrenLimit = 80
+const (
+	SizeTreeNodeLimit            = 600
+	SizeTreeDefaultChildrenLimit = 80
+	SizeTreeMaxChildrenLimit     = 1000
+	sizeTreeMaxNodeLimit         = 6000
+	sizeTreeDirectoryLimit       = 24
+)
+
+// SizeTreeNodeBudget grows with the requested detail while bounding each response.
+func SizeTreeNodeBudget(childrenLimit int) int {
+	childrenLimit = min(SizeTreeMaxChildrenLimit, max(1, childrenLimit))
+	return min(sizeTreeMaxNodeLimit, max(SizeTreeNodeLimit, childrenLimit*SizeTreeNodeLimit/SizeTreeDefaultChildrenLimit))
+}
 
 // SizeTreeNode is an indexed directory rollup or file. A parent's size includes
 // its descendants: callers must never add parent and child sizes together.
@@ -43,9 +53,12 @@ func sizeTreeNode(item *iteminfo.FileInfo) *SizeTreeNode {
 // lookups, without walking files, enumerating subtrees or counting SQL rows.
 // Existing parent indexes bound sorting to the requested directories; no new
 // full-library index build is required. Context cancellation bounds DB work.
-func (db *IndexDB) ReadSizeTree(ctx context.Context, source, rootPath string, depth int, allowed func(*iteminfo.FileInfo) bool) (*SizeTreeNode, error) {
+func (db *IndexDB) ReadSizeTree(ctx context.Context, source, rootPath string, depth, childrenLimit int, allowed func(*iteminfo.FileInfo) bool) (*SizeTreeNode, error) {
 	if depth < 1 || depth > 2 {
 		return nil, fmt.Errorf("depth must be 1 or 2")
+	}
+	if childrenLimit < 1 || childrenLimit > SizeTreeMaxChildrenLimit {
+		return nil, fmt.Errorf("limit must be between 1 and %d", SizeTreeMaxChildrenLimit)
 	}
 	opts := &sql.TxOptions{ReadOnly: true}
 	if db.postgres {
@@ -71,14 +84,14 @@ func (db *IndexDB) ReadSizeTree(ctx context.Context, source, rootPath string, de
 	if !root.IsDir {
 		return nil, sql.ErrNoRows
 	}
-	remaining := SizeTreeNodeLimit - 1
+	remaining := SizeTreeNodeBudget(childrenLimit) - 1
 	expanded := 0
 	var expand func(*SizeTreeNode, int) error
 	expand = func(parent *SizeTreeNode, levels int) error {
 		if remaining == 0 || expanded >= sizeTreeDirectoryLimit {
 			return nil
 		}
-		limit := min(sizeTreeChildrenLimit, remaining)
+		limit := min(childrenLimit, remaining)
 		rows, err := tx.QueryContext(ctx, bind("SELECT "+columns+" FROM index_items WHERE source = ? AND parent_path = ? AND path <> ? ORDER BY size DESC, path ASC LIMIT ?"), source, parent.Path, parent.Path, limit+1)
 		if err != nil {
 			return err

@@ -2,8 +2,8 @@ import { notify } from "@/notify/index.ts";
 import { getApiPath } from "@/utils/url.js";
 import { fetchURL, fetchJSON } from "./utils.ts";
 
-export async function sizeTree(source, path = "/", signal) {
-  return fetchJSON(getApiPath("tools/size-tree", { source, path, depth: "2" }), { signal });
+export async function sizeTree(source, path = "/", signal, limit = 80) {
+  return fetchJSON(getApiPath("tools/size-tree", { source, path, depth: "2", limit: String(limit) }), { signal });
 }
 
 // GET /api/tools/search

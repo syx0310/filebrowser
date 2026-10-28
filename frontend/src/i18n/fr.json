@@ -1234,6 +1234,10 @@
     "loading": "Loading directory sizes…",
     "notIndexed": "This directory has not been indexed yet. Try again after scanning.",
     "unavailable": "The index is still loading or the query timed out. Please retry.",
-    "noArea": "No files with a known nonzero size. Empty folders may still appear in the list below."
+    "noArea": "No files with a known nonzero size. Empty folders may still appear in the list below.",
+    "itemLimit": "Items per folder",
+    "applyLimit": "Apply",
+    "limitHint": "1–{max}, largest first. Remaining space stays grouped.",
+    "invalidLimit": "Enter a whole number between 1 and {max}."
   }
 }

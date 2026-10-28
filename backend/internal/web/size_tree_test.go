@@ -74,6 +74,9 @@ func TestSizeTreeHandlerScopeAndPermissions(t *testing.T) {
 	if got.Root.Path != "/" || len(got.Root.Children) != 1 || got.Root.Children[0].Path != "/visible" {
 		t.Fatalf("wrong scoped result: %s", body)
 	}
+	if got.ChildrenLimit != dbsql.SizeTreeDefaultChildrenLimit || got.NodeLimit != dbsql.SizeTreeNodeLimit {
+		t.Fatalf("unexpected default limits: %+v", got)
+	}
 	for _, secret := range []string{"tenant", "secret", "denied", "hidden", "excluded"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("exposed filtered name %s", secret)
@@ -84,11 +87,32 @@ func TestSizeTreeHandlerScopeAndPermissions(t *testing.T) {
 	if err != nil || !strings.Contains(body, ".hidden") {
 		t.Fatalf("hidden preference ignored: %v", err)
 	}
+	_, body, err = request("/api/tools/size-tree?source=tree&limit=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ChildrenLimit != 1 || len(got.Root.Children) != 1 || !got.Root.HasMore {
+		t.Fatalf("requested limit not applied: %s", body)
+	}
+	_, body, err = request("/api/tools/size-tree?source=tree&limit=1000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ChildrenLimit != 1000 || got.NodeLimit != dbsql.SizeTreeNodeBudget(1000) || len(got.Root.Children) != 2 {
+		t.Fatalf("raised limit or access filtering not applied: %s", body)
+	}
 	for _, tc := range []struct {
 		query  string
 		status int
 	}{
 		{"path=../outside", 400}, {"path=%2F..%2Foutside", 400}, {"path=denied", 403}, {"path=missing", 404}, {"depth=3", 400}, {"depth=0", 400},
+		{"limit=0", 400}, {"limit=-1", 400}, {"limit=1001", 400}, {"limit=1.5", 400}, {"limit=abc", 400}, {"limit=", 400}, {"limit=999999999999999999999", 400},
 	} {
 		status, _, _ := request("/api/tools/size-tree?source=tree&" + tc.query)
 		if status != tc.status {

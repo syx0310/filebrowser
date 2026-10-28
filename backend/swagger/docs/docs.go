@@ -3800,6 +3800,15 @@ const docTemplate = `{
                         "description": "One or two levels; default two",
                         "name": "depth",
                         "in": "query"
+                    },
+                    {
+                        "maximum": 1000,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 80,
+                        "description": "Maximum direct children per folder, largest first",
+                        "name": "limit",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -3807,6 +3816,15 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/web.sizeTreeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "403": {
@@ -9026,6 +9044,9 @@ const docTemplate = `{
         "web.sizeTreeResponse": {
             "type": "object",
             "properties": {
+                "childrenLimit": {
+                    "type": "integer"
+                },
                 "lastIndexedUnixTime": {
                     "type": "integer"
                 },

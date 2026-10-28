@@ -1,3 +1,12 @@
+export const DEFAULT_SIZE_MAP_LIMIT = 80;
+export const MAX_SIZE_MAP_LIMIT = 1000;
+
+export function parseSizeMapLimit(value: unknown): number | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const limit = Number(value);
+  return Number.isInteger(limit) && limit >= 1 && limit <= MAX_SIZE_MAP_LIMIT ? limit : undefined;
+}
+
 export interface SizeNode {
   name: string;
   path: string;
@@ -10,6 +19,10 @@ export interface SizeNode {
   hasMore?: boolean;
   children?: SizeNode[];
   remainder?: boolean;
+}
+
+export function sortSizeNodes(nodes: SizeNode[]): SizeNode[] {
+  return [...nodes].sort((a, b) => b.size - a.size || a.path.localeCompare(b.path));
 }
 
 export interface SizeRect {
@@ -42,7 +55,7 @@ export function directoryColor(path: string, nested = false): string {
 // Squarified layout uses only sibling weights. Directory totals are never
 // added to their descendants; each nested level stays inside its parent box.
 function squarify(nodes: SizeNode[], x: number, y: number, width: number, height: number): Omit<SizeRect, "color" | "nested">[] {
-  const positive = nodes.filter((node) => Number.isFinite(node.size) && node.size > 0).sort((a, b) => b.size - a.size || a.path.localeCompare(b.path));
+  const positive = sortSizeNodes(nodes.filter((node) => Number.isFinite(node.size) && node.size > 0));
   const sum = positive.reduce((value, node) => value + node.size, 0);
   if (!sum || width <= 0 || height <= 0) return [];
   const pending = positive.map((node) => ({ node, area: node.size / sum * width * height }));
